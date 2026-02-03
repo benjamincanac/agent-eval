@@ -82,7 +82,7 @@ export function createOpenCodeAgent(): Agent {
     },
 
     getDefaultModel(): ModelTier {
-      return 'anthropic/claude-sonnet-4';
+      return 'vercel/anthropic/claude-sonnet-4';
     },
 
     async run(fixturePath: string, options: AgentRunOptions): Promise<AgentRunResult> {

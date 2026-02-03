@@ -370,6 +370,10 @@ export class DockerSandboxManager implements Sandbox {
 
     // Upload to container
     await this.container.putArchive(pack, { path: CONTAINER_WORKDIR });
+
+    // Fix ownership - putArchive uploads as root, but we need files owned by node user
+    // so that OpenCode and other agents can edit them
+    await this.runCommandAsRoot('chown', ['-R', `${SANDBOX_UID}:${SANDBOX_GID}`, CONTAINER_WORKDIR]);
   }
 
   /**

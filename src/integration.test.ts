@@ -630,7 +630,7 @@ test('greet exists', () => {
 
       const result = await runSingleEval(fixture, {
         agent: 'vercel-ai-gateway/opencode',
-        model: 'anthropic/claude-sonnet-4',
+        model: 'vercel/anthropic/claude-sonnet-4',
         timeout: 180,
         apiKey: process.env.AI_GATEWAY_API_KEY!,
         scripts: ['build'],
@@ -703,7 +703,7 @@ test('contains greeting', () => {
 
       const result = await runSingleEval(fixture, {
         agent: 'vercel-ai-gateway/opencode',
-        model: 'anthropic/claude-sonnet-4',
+        model: 'vercel/anthropic/claude-sonnet-4',
         timeout: 180,
         apiKey: process.env.AI_GATEWAY_API_KEY!,
         scripts: ['build'],
@@ -740,6 +740,173 @@ test('contains greeting', () => {
         }
       }
     }, 300000); // 5 minute timeout
+  });
+
+  // ============================================================================
+  // Parallel sandbox tests for all agents/models
+  // ============================================================================
+
+  // Helper to create a unique fixture for each test
+  function createTestFixture(testId: string) {
+    const fixtureDir = join(TEST_DIR, testId);
+    mkdirSync(join(fixtureDir, 'src'), { recursive: true });
+
+    writeFileSync(
+      join(fixtureDir, 'PROMPT.md'),
+      'Add a function called greet that returns "Hello!"'
+    );
+    writeFileSync(
+      join(fixtureDir, 'EVAL.ts'),
+      `
+import { test, expect } from 'vitest';
+import { readFileSync } from 'fs';
+
+test('greet exists', () => {
+  const content = readFileSync('src/index.ts', 'utf-8');
+  expect(content).toContain('greet');
+});
+`
+    );
+    writeFileSync(
+      join(fixtureDir, 'package.json'),
+      JSON.stringify({
+        name: testId,
+        type: 'module',
+        scripts: { build: 'tsc' },
+        devDependencies: { typescript: '^5.0.0', vitest: '^2.1.0' },
+      })
+    );
+    writeFileSync(
+      join(fixtureDir, 'tsconfig.json'),
+      JSON.stringify({
+        compilerOptions: {
+          target: 'ES2020',
+          module: 'ESNext',
+          moduleResolution: 'bundler',
+          outDir: 'dist',
+        },
+        include: ['src'],
+      })
+    );
+    writeFileSync(join(fixtureDir, 'src/index.ts'), '// TODO: implement');
+
+    return loadFixture(TEST_DIR, testId);
+  }
+
+  describe.skipIf(!hasAiGatewayCredentials)('Parallel agent/model/sandbox tests', () => {
+    // OpenCode + Minimax on Docker
+    it.concurrent.skipIf(!hasDockerSandbox)(
+      'OpenCode + minimax-m2.1 on Docker',
+      async () => {
+        const fixture = createTestFixture('opencode-minimax-docker');
+        const result = await runSingleEval(fixture, {
+          agent: 'vercel-ai-gateway/opencode',
+          model: 'vercel/minimax/minimax-m2.1',
+          timeout: 180,
+          apiKey: process.env.AI_GATEWAY_API_KEY!,
+          scripts: ['build'],
+          sandbox: 'docker',
+        });
+        expect(result.result.duration).toBeGreaterThan(0);
+        expect(['passed', 'failed']).toContain(result.result.status);
+      },
+      300000
+    );
+
+    // OpenCode + Minimax on Vercel
+    it.concurrent.skipIf(!hasVercelSandbox)(
+      'OpenCode + minimax-m2.1 on Vercel',
+      async () => {
+        const fixture = createTestFixture('opencode-minimax-vercel');
+        const result = await runSingleEval(fixture, {
+          agent: 'vercel-ai-gateway/opencode',
+          model: 'vercel/minimax/minimax-m2.1',
+          timeout: 180,
+          apiKey: process.env.AI_GATEWAY_API_KEY!,
+          scripts: ['build'],
+          sandbox: 'vercel',
+        });
+        expect(result.result.duration).toBeGreaterThan(0);
+        expect(['passed', 'failed']).toContain(result.result.status);
+      },
+      300000
+    );
+
+    // Claude Code on Docker
+    it.concurrent.skipIf(!hasDockerSandbox)(
+      'Claude Code + sonnet on Docker',
+      async () => {
+        const fixture = createTestFixture('claude-code-docker');
+        const result = await runSingleEval(fixture, {
+          agent: 'vercel-ai-gateway/claude-code',
+          model: 'sonnet',
+          timeout: 180,
+          apiKey: process.env.AI_GATEWAY_API_KEY!,
+          scripts: ['build'],
+          sandbox: 'docker',
+        });
+        expect(result.result.duration).toBeGreaterThan(0);
+        expect(['passed', 'failed']).toContain(result.result.status);
+      },
+      300000
+    );
+
+    // Claude Code on Vercel
+    it.concurrent.skipIf(!hasVercelSandbox)(
+      'Claude Code + sonnet on Vercel',
+      async () => {
+        const fixture = createTestFixture('claude-code-vercel');
+        const result = await runSingleEval(fixture, {
+          agent: 'vercel-ai-gateway/claude-code',
+          model: 'sonnet',
+          timeout: 180,
+          apiKey: process.env.AI_GATEWAY_API_KEY!,
+          scripts: ['build'],
+          sandbox: 'vercel',
+        });
+        expect(result.result.duration).toBeGreaterThan(0);
+        expect(['passed', 'failed']).toContain(result.result.status);
+      },
+      300000
+    );
+
+    // Codex on Docker
+    it.concurrent.skipIf(!hasDockerSandbox)(
+      'Codex + gpt-5.2-codex on Docker',
+      async () => {
+        const fixture = createTestFixture('codex-docker');
+        const result = await runSingleEval(fixture, {
+          agent: 'vercel-ai-gateway/codex',
+          model: 'openai/gpt-5.2-codex',
+          timeout: 180,
+          apiKey: process.env.AI_GATEWAY_API_KEY!,
+          scripts: ['build'],
+          sandbox: 'docker',
+        });
+        expect(result.result.duration).toBeGreaterThan(0);
+        expect(['passed', 'failed']).toContain(result.result.status);
+      },
+      300000
+    );
+
+    // Codex on Vercel
+    it.concurrent.skipIf(!hasVercelSandbox)(
+      'Codex + gpt-5.2-codex on Vercel',
+      async () => {
+        const fixture = createTestFixture('codex-vercel');
+        const result = await runSingleEval(fixture, {
+          agent: 'vercel-ai-gateway/codex',
+          model: 'openai/gpt-5.2-codex',
+          timeout: 180,
+          apiKey: process.env.AI_GATEWAY_API_KEY!,
+          scripts: ['build'],
+          sandbox: 'vercel',
+        });
+        expect(result.result.duration).toBeGreaterThan(0);
+        expect(['passed', 'failed']).toContain(result.result.status);
+      },
+      300000
+    );
   });
 
   describe('CLI commands', () => {
