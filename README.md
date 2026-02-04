@@ -208,6 +208,7 @@ Choose your agent and authentication method:
 agent: 'vercel-ai-gateway/claude-code'  // Claude Code via AI Gateway
 agent: 'vercel-ai-gateway/codex'        // OpenAI Codex via AI Gateway
 agent: 'vercel-ai-gateway/opencode'     // OpenCode via AI Gateway
+agent: 'vercel-ai-gateway/ai-sdk-harness' // Simple AI SDK harness (any model)
 
 // Direct API (uses provider keys directly)
 agent: 'claude-code'  // requires ANTHROPIC_API_KEY
@@ -261,6 +262,28 @@ Under the hood, the agent creates an `opencode.json` config file that configures
 
 And runs: `opencode run "<prompt>" --model {provider}/{model} --format json`
 
+### AI SDK Harness Model Configuration
+
+The AI SDK harness (`vercel-ai-gateway/ai-sdk-harness`) is a lightweight agent that works with **any model** available on Vercel AI Gateway. Unlike OpenCode, it uses the standard `{provider}/{model}` format without a `vercel/` prefix:
+
+```typescript
+// Anthropic models
+model: 'anthropic/claude-sonnet-4'
+model: 'anthropic/claude-opus-4'
+
+// Moonshot AI (Kimi) models
+model: 'moonshotai/kimi-k2.5'
+model: 'moonshotai/kimi-k2-thinking'
+
+// Minimax models
+model: 'minimax/minimax-m2.1'
+
+// OpenAI models
+model: 'openai/gpt-4o'
+```
+
+The AI SDK harness includes these tools: `readFile`, `writeFile`, `editFile`, `listFiles`, `glob`, `grep`, and `bash`. It's ideal for evaluating models that may not be fully compatible with OpenCode.
+
 ### Full Configuration
 
 ```typescript
@@ -274,6 +297,7 @@ const config: ExperimentConfig = {
   // - claude-code: 'opus'
   // - codex: 'openai/gpt-5.2-codex'
   // - opencode: 'vercel/anthropic/claude-sonnet-4' (note: vercel/ prefix required)
+  // - ai-sdk-harness: 'anthropic/claude-sonnet-4' (works with any AI Gateway model)
   model: 'opus',
 
   // How many times to run each eval

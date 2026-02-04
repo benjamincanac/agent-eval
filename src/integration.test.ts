@@ -743,6 +743,269 @@ test('contains greeting', () => {
   });
 
   // ============================================================================
+  // AI SDK Harness tests
+  // Tests the new AI SDK agent with various models via AI Gateway
+  // ============================================================================
+
+  describe.skipIf(!hasAiGatewayCredentials)('AI SDK Harness tests', () => {
+    // First test with Claude to verify the agent implementation works
+    it('AI SDK Harness with anthropic/claude-sonnet-4 (baseline)', async () => {
+      const fixtureDir = join(TEST_DIR, 'ai-sdk-claude-baseline');
+      mkdirSync(join(fixtureDir, 'src'), { recursive: true });
+
+      writeFileSync(
+        join(fixtureDir, 'PROMPT.md'),
+        'Add a function called greet that returns "Hello from Claude!"'
+      );
+      writeFileSync(
+        join(fixtureDir, 'EVAL.ts'),
+        `
+import { test, expect } from 'vitest';
+import { readFileSync } from 'fs';
+
+test('greet exists', () => {
+  const content = readFileSync('src/index.ts', 'utf-8');
+  expect(content).toContain('greet');
+});
+`
+      );
+      writeFileSync(
+        join(fixtureDir, 'package.json'),
+        JSON.stringify({
+          name: 'ai-sdk-claude-baseline',
+          type: 'module',
+          scripts: { build: 'tsc' },
+          devDependencies: { typescript: '^5.0.0', vitest: '^2.1.0' },
+        })
+      );
+      writeFileSync(
+        join(fixtureDir, 'tsconfig.json'),
+        JSON.stringify({
+          compilerOptions: {
+            target: 'ES2020',
+            module: 'ESNext',
+            moduleResolution: 'bundler',
+            outDir: 'dist',
+          },
+          include: ['src'],
+        })
+      );
+      writeFileSync(join(fixtureDir, 'src/index.ts'), '// TODO: implement');
+
+      const fixture = loadFixture(TEST_DIR, 'ai-sdk-claude-baseline');
+
+      const result = await runSingleEval(fixture, {
+        agent: 'vercel-ai-gateway/ai-sdk-harness',
+        model: 'anthropic/claude-sonnet-4',
+        timeout: 300,
+        apiKey: process.env.AI_GATEWAY_API_KEY!,
+        scripts: ['build'],
+      });
+
+      console.log('\n=== AI SDK Harness + anthropic/claude-sonnet-4 (baseline) ===');
+      console.log('Status:', result.result.status);
+      console.log('Duration:', result.result.duration);
+      if (result.result.error) {
+        console.log('Error:', result.result.error);
+      }
+      if (result.transcript) {
+        console.log('Transcript length:', result.transcript.length);
+        console.log('Transcript preview:', result.transcript.substring(0, 1000));
+      }
+
+      expect(result.result.duration).toBeGreaterThan(0);
+      expect(result.result.status).toBeDefined();
+      // This should pass if the agent implementation is correct
+      expect(result.result.status).toBe('passed');
+    }, 600000);
+    // Test with moonshotai/kimi-k2.5
+    it('AI SDK Harness with moonshotai/kimi-k2.5', async () => {
+      const fixtureDir = join(TEST_DIR, 'ai-sdk-kimi-k2.5');
+      mkdirSync(join(fixtureDir, 'src'), { recursive: true });
+
+      writeFileSync(
+        join(fixtureDir, 'PROMPT.md'),
+        'Add a function called greet that returns "Hello from Kimi!"'
+      );
+      writeFileSync(
+        join(fixtureDir, 'EVAL.ts'),
+        `
+import { test, expect } from 'vitest';
+import { readFileSync } from 'fs';
+
+test('greet exists', () => {
+  const content = readFileSync('src/index.ts', 'utf-8');
+  expect(content).toContain('greet');
+});
+`
+      );
+      writeFileSync(
+        join(fixtureDir, 'package.json'),
+        JSON.stringify({
+          name: 'ai-sdk-kimi-k2.5',
+          type: 'module',
+          scripts: { build: 'tsc' },
+          devDependencies: { typescript: '^5.0.0', vitest: '^2.1.0' },
+        })
+      );
+      writeFileSync(
+        join(fixtureDir, 'tsconfig.json'),
+        JSON.stringify({
+          compilerOptions: {
+            target: 'ES2020',
+            module: 'ESNext',
+            moduleResolution: 'bundler',
+            outDir: 'dist',
+          },
+          include: ['src'],
+        })
+      );
+      writeFileSync(join(fixtureDir, 'src/index.ts'), '// TODO: implement');
+
+      const fixture = loadFixture(TEST_DIR, 'ai-sdk-kimi-k2.5');
+
+      const result = await runSingleEval(fixture, {
+        agent: 'vercel-ai-gateway/ai-sdk-harness',
+        model: 'moonshotai/kimi-k2.5',
+        timeout: 300,
+        apiKey: process.env.AI_GATEWAY_API_KEY!,
+        scripts: ['build'],
+      });
+
+      // Log detailed info for debugging
+      console.log('\n=== AI SDK Harness + moonshotai/kimi-k2.5 ===');
+      console.log('Status:', result.result.status);
+      console.log('Duration:', result.result.duration);
+      if (result.result.error) {
+        console.log('Error:', result.result.error);
+      }
+      if (result.transcript) {
+        console.log('Transcript length:', result.transcript.length);
+        console.log('Transcript preview:', result.transcript.substring(0, 500));
+      }
+
+      // Verify result structure
+      expect(result.result.duration).toBeGreaterThan(0);
+      expect(result.result.status).toBeDefined();
+      expect(['passed', 'failed']).toContain(result.result.status);
+
+      // Verify transcript is captured
+      if (result.transcript) {
+        expect(typeof result.transcript).toBe('string');
+        expect(result.transcript.length).toBeGreaterThan(0);
+      }
+    }, 600000);
+
+    // Comprehensive test verifying transcript and result structure
+    it('verifies AI SDK Harness + Kimi K2.5 transcript and result structure', async () => {
+      const fixtureDir = join(TEST_DIR, 'ai-sdk-kimi-structure-test');
+      mkdirSync(join(fixtureDir, 'src'), { recursive: true });
+
+      writeFileSync(
+        join(fixtureDir, 'PROMPT.md'),
+        'Create a hello.ts file in the src directory that exports a greeting constant set to "Hello from Kimi K2.5!"'
+      );
+      writeFileSync(
+        join(fixtureDir, 'EVAL.ts'),
+        `
+import { test, expect } from 'vitest';
+import { readFileSync, existsSync } from 'fs';
+
+test('hello.ts exists', () => {
+  expect(existsSync('src/hello.ts')).toBe(true);
+});
+
+test('contains greeting constant', () => {
+  const content = readFileSync('src/hello.ts', 'utf-8');
+  expect(content).toContain('greeting');
+  expect(content).toContain('Hello from Kimi');
+});
+`
+      );
+      writeFileSync(
+        join(fixtureDir, 'package.json'),
+        JSON.stringify({
+          name: 'ai-sdk-kimi-structure-test',
+          type: 'module',
+          scripts: { build: 'tsc' },
+          devDependencies: { typescript: '^5.0.0', vitest: '^2.1.0' },
+        })
+      );
+      writeFileSync(
+        join(fixtureDir, 'tsconfig.json'),
+        JSON.stringify({
+          compilerOptions: {
+            target: 'ES2020',
+            module: 'ESNext',
+            moduleResolution: 'bundler',
+            outDir: 'dist',
+          },
+          include: ['src'],
+        })
+      );
+
+      const fixture = loadFixture(TEST_DIR, 'ai-sdk-kimi-structure-test');
+
+      const result = await runSingleEval(fixture, {
+        agent: 'vercel-ai-gateway/ai-sdk-harness',
+        model: 'moonshotai/kimi-k2.5',
+        timeout: 300,
+        apiKey: process.env.AI_GATEWAY_API_KEY!,
+        scripts: ['build'],
+      });
+
+      console.log('\n=== AI SDK + Kimi K2.5 Structure Test ===');
+      console.log('Status:', result.result.status);
+      console.log('Duration:', result.result.duration);
+      console.log('Has transcript:', !!result.transcript);
+      console.log('Has outputContent:', !!result.outputContent);
+      console.log('Has generatedFiles:', !!result.generatedFiles);
+
+      // Verify EvalRunData structure
+      expect(result).toHaveProperty('result');
+      expect(result.result).toHaveProperty('status');
+      expect(result.result).toHaveProperty('duration');
+
+      // Verify optional properties have correct types when present
+      if (result.result.error) {
+        expect(typeof result.result.error).toBe('string');
+        console.log('Error:', result.result.error);
+      }
+
+      // Verify transcript structure if present
+      if (result.transcript) {
+        expect(typeof result.transcript).toBe('string');
+        expect(result.transcript.length).toBeGreaterThan(0);
+
+        // AI SDK agent outputs JSON events
+        const firstLine = result.transcript.split('\n')[0];
+        try {
+          const parsed = JSON.parse(firstLine);
+          console.log('Transcript first event type:', parsed.type || 'unknown');
+        } catch {
+          console.log('Transcript is not JSONL format');
+        }
+      }
+
+      // Verify output content structure if present
+      if (result.outputContent) {
+        console.log('Output content keys:', Object.keys(result.outputContent));
+        if (result.outputContent.eval) {
+          expect(typeof result.outputContent.eval).toBe('string');
+        }
+        if (result.outputContent.scripts?.build) {
+          expect(typeof result.outputContent.scripts.build).toBe('string');
+        }
+      }
+
+      // Verify generated files if present
+      if (result.generatedFiles) {
+        console.log('Generated files:', Object.keys(result.generatedFiles));
+      }
+    }, 600000);
+  });
+
+  // ============================================================================
   // Parallel sandbox tests for all agents/models
   // ============================================================================
 
@@ -906,6 +1169,46 @@ test('greet exists', () => {
         expect(['passed', 'failed']).toContain(result.result.status);
       },
       300000
+    );
+
+    // AI SDK Harness + Kimi K2.5 on Docker
+    it.concurrent.skipIf(!hasDockerSandbox)(
+      'AI SDK Harness + kimi-k2.5 on Docker',
+      async () => {
+        const fixture = createTestFixture('ai-sdk-kimi-docker');
+        const result = await runSingleEval(fixture, {
+          agent: 'vercel-ai-gateway/ai-sdk-harness',
+          model: 'moonshotai/kimi-k2.5',
+          timeout: 300,
+          apiKey: process.env.AI_GATEWAY_API_KEY!,
+          scripts: ['build'],
+          sandbox: 'docker',
+        });
+        console.log('AI SDK + kimi-k2.5 Docker:', result.result.status, result.result.error || '');
+        expect(result.result.duration).toBeGreaterThan(0);
+        expect(['passed', 'failed']).toContain(result.result.status);
+      },
+      600000
+    );
+
+    // AI SDK Harness + Kimi K2.5 on Vercel
+    it.concurrent.skipIf(!hasVercelSandbox)(
+      'AI SDK Harness + kimi-k2.5 on Vercel',
+      async () => {
+        const fixture = createTestFixture('ai-sdk-kimi-vercel');
+        const result = await runSingleEval(fixture, {
+          agent: 'vercel-ai-gateway/ai-sdk-harness',
+          model: 'moonshotai/kimi-k2.5',
+          timeout: 300,
+          apiKey: process.env.AI_GATEWAY_API_KEY!,
+          scripts: ['build'],
+          sandbox: 'vercel',
+        });
+        console.log('AI SDK + kimi-k2.5 Vercel:', result.result.status, result.result.error || '');
+        expect(result.result.duration).toBeGreaterThan(0);
+        expect(['passed', 'failed']).toContain(result.result.status);
+      },
+      600000
     );
   });
 
