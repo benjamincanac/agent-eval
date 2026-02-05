@@ -445,6 +445,10 @@ This writes a `.env.local` file with all the required environment variables (AI_
 
 **Test incrementally**: Start with simple tasks, add complexity as you learn what works.
 
+## Contributing
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for development workflow and release process.
+
 ## License
 
 MIT
