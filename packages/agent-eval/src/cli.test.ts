@@ -107,6 +107,33 @@ describe('CLI', () => {
       expect(result.exitCode).toBe(0);
     });
 
+    it('--smoke picks first eval alphabetically and sets runs to 1', () => {
+      const projectDir = join(TEST_DIR, 'smoke-project');
+      const experimentsDir = join(projectDir, 'experiments');
+      mkdirSync(experimentsDir, { recursive: true });
+
+      const configContent = `export default { agent: 'claude-code' };`;
+      writeFileSync(join(experimentsDir, 'cc.ts'), configContent);
+
+      const evalsDir = join(projectDir, 'evals');
+      mkdirSync(evalsDir);
+
+      // Create two evals - smoke should pick first alphabetically
+      for (const evalName of ['beta-eval', 'alpha-eval']) {
+        const fixture = join(evalsDir, evalName);
+        mkdirSync(fixture);
+        writeFileSync(join(fixture, 'PROMPT.md'), 'Test task');
+        writeFileSync(join(fixture, 'EVAL.ts'), 'test code');
+        writeFileSync(join(fixture, 'package.json'), JSON.stringify({ type: 'module' }));
+      }
+
+      const result = runCli(['cc', '--smoke', '--dry'], projectDir);
+      expect(result.stdout).toContain('SMOKE TEST');
+      expect(result.stdout).toContain('alpha-eval');
+      expect(result.stdout).toContain('1 eval(s) x 1 run(s)');
+      expect(result.exitCode).toBe(0);
+    });
+
     it('shows error when no valid fixtures found', () => {
       // Create project structure matching convention
       const projectDir = join(TEST_DIR, 'empty-project');

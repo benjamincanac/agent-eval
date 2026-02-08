@@ -50,7 +50,7 @@ function resolveConfigPath(input: string): string {
 /**
  * Run experiment command handler
  */
-async function runExperimentCommand(configInput: string, options: { dry?: boolean }) {
+async function runExperimentCommand(configInput: string, options: { dry?: boolean; smoke?: boolean }) {
   try {
     const configPath = resolveConfigPath(configInput);
     const absoluteConfigPath = resolve(process.cwd(), configPath);
@@ -97,22 +97,30 @@ async function runExperimentCommand(configInput: string, options: { dry?: boolea
       process.exit(1);
     }
 
-    console.log(chalk.green(`\nFound ${fixtures.length} valid fixture(s), will run ${evalNames.length}:`));
-    for (const name of evalNames) {
-      console.log(chalk.green(`  - ${name}`));
+    // Smoke mode: pick first eval alphabetically, override runs to 1
+    const smokeEvalNames = options.smoke ? [evalNames.sort()[0]] : evalNames;
+    const smokeRuns = options.smoke ? 1 : config.runs;
+
+    if (options.smoke) {
+      console.log(chalk.yellow(`\n[SMOKE TEST] Running 1 eval to verify setup: ${smokeEvalNames[0]}`));
+    } else {
+      console.log(chalk.green(`\nFound ${fixtures.length} valid fixture(s), will run ${evalNames.length}:`));
+      for (const name of evalNames) {
+        console.log(chalk.green(`  - ${name}`));
+      }
     }
 
 	const models = Array.isArray(config.model) ? config.model : [config.model];
 
     // Show info for all models
-    const totalRunsPerModel = evalNames.length * config.runs;
+    const totalRunsPerModel = smokeEvalNames.length * smokeRuns;
     const totalRuns = totalRunsPerModel * models.length;
 
     if (models.length > 1) {
-      console.log(chalk.blue(`\nRunning ${evalNames.length} eval(s) x ${config.runs} run(s) x ${models.length} model(s) = ${totalRuns} total runs`));
+      console.log(chalk.blue(`\nRunning ${smokeEvalNames.length} eval(s) x ${smokeRuns} run(s) x ${models.length} model(s) = ${totalRuns} total runs`));
       console.log(chalk.blue(`Agent: ${config.agent}, Models: ${models.join(', ')}, Timeout: ${config.timeout}s, Early Exit: ${config.earlyExit}`));
     } else {
-      console.log(chalk.blue(`\nRunning ${evalNames.length} eval(s) x ${config.runs} run(s) = ${totalRuns} total runs`));
+      console.log(chalk.blue(`\nRunning ${smokeEvalNames.length} eval(s) x ${smokeRuns} run(s) = ${totalRuns} total runs`));
       console.log(chalk.blue(`Agent: ${config.agent}, Model: ${models[0]}, Timeout: ${config.timeout}s, Early Exit: ${config.earlyExit}`));
     }
 
@@ -136,7 +144,7 @@ async function runExperimentCommand(configInput: string, options: { dry?: boolea
     }
 
     // Filter fixtures to only the ones we want to run
-    const selectedFixtures = fixtures.filter((f) => evalNames.includes(f.name));
+    const selectedFixtures = fixtures.filter((f) => smokeEvalNames.includes(f.name));
 
     // Get experiment name from config file
     const baseExperimentName = basename(configPath, '.ts').replace(/\.js$/, '');
@@ -147,8 +155,8 @@ async function runExperimentCommand(configInput: string, options: { dry?: boolea
     // Run experiments for each model
     let allPassed = true;
     for (const model of models) {
-      // Create a config for this specific model
-      const modelConfig = { ...config, model };
+      // Create a config for this specific model (with smoke overrides if applicable)
+      const modelConfig = { ...config, model, runs: smokeRuns };
 
       // Include model in experiment name for organized results
       const experimentName = `${baseExperimentName}/${model}`;
@@ -258,7 +266,8 @@ program
 program
   .argument('[config]', 'Experiment name (e.g., "cc") or path')
   .option('--dry', 'Preview what would run without executing')
-  .action(async (configInput: string | undefined, options: { dry?: boolean }) => {
+  .option('--smoke', 'Run a single eval to verify setup (API keys, model IDs, sandbox)')
+  .action(async (configInput: string | undefined, options: { dry?: boolean; smoke?: boolean }) => {
     if (!configInput) {
       program.help();
       return;
