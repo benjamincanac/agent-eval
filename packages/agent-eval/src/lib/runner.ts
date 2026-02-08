@@ -37,6 +37,8 @@ export interface RunExperimentOptions {
   resultsDir: string;
   /** Experiment name */
   experimentName: string;
+  /** Per-eval fingerprints (eval name -> hash) for result reuse */
+  fingerprints?: Record<string, string>;
   /** Callback for progress updates */
   onProgress?: (message: string) => void;
   /** Whether to run in verbose mode */
@@ -68,7 +70,7 @@ interface AttemptResult {
 export async function runExperiment(
   options: RunExperimentOptions
 ): Promise<ExperimentResults> {
-  const { config, fixtures, apiKey, resultsDir, experimentName, onProgress, verbose } = options;
+  const { config, fixtures, apiKey, resultsDir, experimentName, fingerprints, onProgress, verbose } = options;
   const startedAt = new Date();
 
   // Get the agent from registry
@@ -236,6 +238,7 @@ export async function runExperiment(
   const outputDir = saveResults(experimentResults, {
     resultsDir,
     experimentName,
+    fingerprints,
   });
 
   log(`\nResults saved to: ${outputDir}`);

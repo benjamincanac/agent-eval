@@ -379,8 +379,8 @@ export function scanReusableResults(
         // Check validity (valid defaults to true if not explicitly set to false)
         if (summary.valid === false) continue;
 
-        // Check that it has at least some passed runs
-        if (summary.passedRuns <= 0) continue;
+        // Check that it has completed runs (use --force to re-run failures)
+        if (summary.totalRuns <= 0) continue;
 
         reusable.set(evalDir, {
           evalName: evalDir,

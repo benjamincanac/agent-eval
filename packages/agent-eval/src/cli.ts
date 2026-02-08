@@ -324,14 +324,7 @@ async function runAllCommand(experimentArgs: string[], options: { dry?: boolean;
       }
 
       if (options.dry) {
-        console.log(chalk.yellow('\n[DRY RUN] Would run the above experiments'));
-        if (options.smoke) {
-          console.log(chalk.yellow('  Mode: smoke test (1 eval per experiment)'));
-        }
-        if (options.force) {
-          console.log(chalk.yellow('  Force: re-run everything (ignoring fingerprints)'));
-        }
-        return;
+        console.log(chalk.yellow('\n[DRY RUN] Checking what would run...\n'));
       }
 
       // Run all experiments in parallel
@@ -365,7 +358,7 @@ async function runAllCommand(experimentArgs: string[], options: { dry?: boolean;
         const agent = getAgent(config.agent);
         const apiKeyEnvVar = agent.getApiKeyEnvVar();
         const apiKey = process.env[apiKeyEnvVar];
-        if (!apiKey) {
+        if (!apiKey && !options.dry) {
           console.error(chalk.red(`${apiKeyEnvVar} not set, skipping ${baseExperimentName}`));
           return;
         }
@@ -388,14 +381,34 @@ async function runAllCommand(experimentArgs: string[], options: { dry?: boolean;
             fingerprints[fixture.name] = computeFingerprint(fixture.path, modelConfig);
           }
 
-          // Check for reusable results (unless --force)
+          // Check for reusable results (unless --force or --smoke)
           let fixturesToRun = selectedFixtures;
-          if (!options.force) {
+          if (!options.force && !options.smoke) {
             const reusable = scanReusableResults(resultsDir, experimentName, fingerprints);
             if (reusable.size > 0) {
               console.log(chalk.gray(`  ${experimentName}: reusing ${reusable.size} cached result(s)`));
               fixturesToRun = selectedFixtures.filter((f) => !reusable.has(f.name));
             }
+          }
+
+          // Dry run: report what would happen and move on
+          if (options.dry) {
+            const cachedCount = selectedFixtures.length - fixturesToRun.length;
+            if (fixturesToRun.length === 0) {
+              console.log(chalk.gray(`  ${experimentName}: ${selectedFixtures.length} eval(s) — all cached, nothing to run`));
+            } else {
+              console.log(chalk.blue(`  ${experimentName}: ${fixturesToRun.length} to run, ${cachedCount} cached`));
+              for (const f of fixturesToRun) {
+                console.log(chalk.green(`    → ${f.name}`));
+              }
+              if (cachedCount > 0) {
+                const cachedNames = selectedFixtures
+                  .filter((f) => !fixturesToRun.some((r) => r.name === f.name))
+                  .map((f) => f.name);
+                console.log(chalk.gray(`    cached: ${cachedNames.join(', ')}`));
+              }
+            }
+            continue;
           }
 
           if (fixturesToRun.length === 0) {
@@ -409,9 +422,10 @@ async function runAllCommand(experimentArgs: string[], options: { dry?: boolean;
             const results = await runExperiment({
               config: modelConfig,
               fixtures: fixturesToRun,
-              apiKey,
+              apiKey: apiKey!,
               resultsDir,
               experimentName,
+              fingerprints,
               onProgress: (msg) => console.log(`  ${msg}`),
             });
 
@@ -448,9 +462,10 @@ async function runAllCommand(experimentArgs: string[], options: { dry?: boolean;
                 await runExperiment({
                   config: modelConfig,
                   fixtures: retryFixtures,
-                  apiKey,
+                  apiKey: apiKey!,
                   resultsDir,
                   experimentName,
+                  fingerprints,
                   onProgress: (msg) => console.log(`  [retry] ${msg}`),
                 });
               }
@@ -476,7 +491,9 @@ async function runAllCommand(experimentArgs: string[], options: { dry?: boolean;
       });
 
       await Promise.all(experimentPromises);
-      process.exit(allPassed ? 0 : 1);
+      if (!options.dry) {
+        process.exit(allPassed ? 0 : 1);
+      }
     } catch (error) {
       if (error instanceof Error) {
         console.error(chalk.red(`Error: ${error.message}`));

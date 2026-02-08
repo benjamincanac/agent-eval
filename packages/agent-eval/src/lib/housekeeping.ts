@@ -55,7 +55,9 @@ export function housekeep(
     return stats;
   }
 
-  // Track which evals we've already seen (newest wins)
+  // Track which (eval, fingerprint) pairs we've already seen (newest wins).
+  // Results with different fingerprints (e.g. smoke vs full run) are not
+  // duplicates of each other and should coexist.
   const seenEvals = new Set<string>();
 
   for (const timestamp of timestamps) {
@@ -73,8 +75,12 @@ export function housekeep(
 
       if (!statSync(evalResultDir).isDirectory()) continue;
 
-      if (seenEvals.has(evalDir)) {
-        // Older duplicate — remove
+      // Read fingerprint to distinguish different configs (e.g. smoke vs full)
+      const fingerprint = readFingerprint(evalResultDir);
+      const dedupeKey = fingerprint ? `${evalDir}:${fingerprint}` : evalDir;
+
+      if (seenEvals.has(dedupeKey)) {
+        // Older duplicate with same fingerprint — remove
         if (!options?.dry) {
           rmSync(evalResultDir, { recursive: true });
         }
@@ -84,7 +90,7 @@ export function housekeep(
 
       // Check if this result is complete
       if (isComplete(evalResultDir)) {
-        seenEvals.add(evalDir);
+        seenEvals.add(dedupeKey);
       } else {
         // Incomplete — remove
         if (!options?.dry) {
@@ -109,6 +115,18 @@ export function housekeep(
   }
 
   return stats;
+}
+
+/**
+ * Read the fingerprint from an eval result's summary.json, if present.
+ */
+function readFingerprint(evalResultDir: string): string | undefined {
+  try {
+    const summary = JSON.parse(readFileSync(join(evalResultDir, 'summary.json'), 'utf-8'));
+    return summary.fingerprint;
+  } catch {
+    return undefined;
+  }
 }
 
 /**

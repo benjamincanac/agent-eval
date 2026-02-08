@@ -379,12 +379,24 @@ describe('results utilities', () => {
       expect(result.size).toBe(0);
     });
 
-    it('skips results with zero passed runs', () => {
+    it('reuses results with zero passed runs (use --force to re-run)', () => {
       const expDir = join(TEST_DIR, 'my-exp', '2024-01-26T12-00-00.000Z', 'eval-1');
       mkdirSync(expDir, { recursive: true });
       writeFileSync(
         join(expDir, 'summary.json'),
         JSON.stringify({ totalRuns: 2, passedRuns: 0, passRate: '0%', meanDuration: 10, fingerprint: 'abc123' })
+      );
+
+      const result = scanReusableResults(TEST_DIR, 'my-exp', { 'eval-1': 'abc123' });
+      expect(result.size).toBe(1);
+    });
+
+    it('skips results with zero total runs', () => {
+      const expDir = join(TEST_DIR, 'my-exp', '2024-01-26T12-00-00.000Z', 'eval-1');
+      mkdirSync(expDir, { recursive: true });
+      writeFileSync(
+        join(expDir, 'summary.json'),
+        JSON.stringify({ totalRuns: 0, passedRuns: 0, passRate: '0%', meanDuration: 0, fingerprint: 'abc123' })
       );
 
       const result = scanReusableResults(TEST_DIR, 'my-exp', { 'eval-1': 'abc123' });
