@@ -101,6 +101,9 @@ export {
   shouldRetry,
 } from './lib/classifier.js';
 
+// Re-export housekeeping
+export { housekeep } from './lib/housekeeping.js';
+
 // Re-export runner utilities
 export type { RunExperimentOptions } from './lib/runner.js';
 export { runExperiment, runSingleEval } from './lib/runner.js';

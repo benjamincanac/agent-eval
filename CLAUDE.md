@@ -15,3 +15,8 @@ Configuration should be done through the experiment config file, not environment
 - Always use the existing integration test framework (`src/integration.test.ts`) for testing
 - Do not create standalone test scripts in `/tmp` - they won't have proper module resolution
 - Run integration tests with: `INTEGRATION_TEST=1 npx vitest run src/integration.test.ts --testNamePattern="<pattern>"`
+
+### Pull Requests
+
+- Every PR that changes user-facing behavior should update the README
+- Every PR should include a changeset (`npx changeset`) for version management

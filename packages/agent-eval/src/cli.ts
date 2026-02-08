@@ -7,7 +7,7 @@
 import { Command } from 'commander';
 import { config as dotenvConfig } from 'dotenv';
 import { resolve, dirname, basename } from 'path';
-import { existsSync, readFileSync } from 'fs';
+import { existsSync, readFileSync, readdirSync } from 'fs';
 import { fileURLToPath } from 'url';
 import chalk from 'chalk';
 import { loadConfig, resolveEvalNames } from './lib/config.js';
@@ -16,7 +16,12 @@ import { runExperiment } from './lib/runner.js';
 import { initProject, getPostInitInstructions } from './lib/init.js';
 import { getAgent } from './lib/agents/index.js';
 import { getSandboxBackendInfo } from './lib/sandbox.js';
+import { computeFingerprint } from './lib/fingerprint.js';
+import { scanReusableResults } from './lib/results.js';
+import { classifyFailure, shouldRetry } from './lib/classifier.js';
+import { housekeep } from './lib/housekeeping.js';
 import { spawnSync } from 'child_process';
+import { minimatch } from 'minimatch';
 
 // Load environment variables (.env.local first, then .env as fallback)
 dotenvConfig({ path: '.env.local' });
@@ -257,6 +262,234 @@ program
     );
 
     process.exit(result.status ?? 1);
+  });
+
+/**
+ * run-all command - discover and run all experiments
+ */
+program
+  .command('run-all')
+  .description('Discover and run all experiments, with fingerprint reuse, classification, and auto-retry')
+  .argument('[experiments...]', 'Experiment names or glob patterns (default: all)')
+  .option('--dry', 'Preview what would run without executing')
+  .option('--force', 'Ignore fingerprints, re-run everything')
+  .option('--smoke', 'Run 1 eval per experiment for sanity checking')
+  .action(async (experimentArgs: string[], options: { dry?: boolean; force?: boolean; smoke?: boolean }) => {
+    try {
+      const projectDir = process.cwd();
+      const experimentsDir = resolve(projectDir, 'experiments');
+      const evalsDir = resolve(projectDir, 'evals');
+      const resultsDir = resolve(projectDir, 'results');
+
+      if (!existsSync(experimentsDir)) {
+        console.error(chalk.red('experiments/ directory not found'));
+        process.exit(1);
+      }
+      if (!existsSync(evalsDir)) {
+        console.error(chalk.red('evals/ directory not found'));
+        process.exit(1);
+      }
+
+      // Discover experiments
+      const allExperimentFiles = readdirSync(experimentsDir)
+        .filter((f) => f.endsWith('.ts') && !f.startsWith('_temp_'))
+        .sort();
+
+      // Filter by args if provided
+      let selectedFiles: string[];
+      if (experimentArgs.length > 0) {
+        selectedFiles = allExperimentFiles.filter((f) => {
+          const name = f.replace(/\.ts$/, '');
+          return experimentArgs.some((arg) =>
+            arg.includes('*') ? minimatch(name, arg) : name === arg
+          );
+        });
+        if (selectedFiles.length === 0) {
+          console.error(chalk.red(`No experiments matched: ${experimentArgs.join(', ')}`));
+          console.error(chalk.gray(`Available: ${allExperimentFiles.map((f) => f.replace(/\.ts$/, '')).join(', ')}`));
+          process.exit(1);
+        }
+      } else {
+        selectedFiles = allExperimentFiles;
+      }
+
+      console.log(chalk.blue(`Discovered ${selectedFiles.length} experiment(s):`));
+      for (const f of selectedFiles) {
+        console.log(chalk.blue(`  - ${f.replace(/\.ts$/, '')}`));
+      }
+
+      // Load all fixtures
+      const { fixtures, errors } = loadAllFixtures(evalsDir);
+      if (errors.length > 0) {
+        console.log(chalk.yellow(`\nWarning: ${errors.length} invalid fixture(s)`));
+      }
+      if (fixtures.length === 0) {
+        console.error(chalk.red('No valid eval fixtures found'));
+        process.exit(1);
+      }
+
+      if (options.dry) {
+        console.log(chalk.yellow('\n[DRY RUN] Would run the above experiments'));
+        if (options.smoke) {
+          console.log(chalk.yellow('  Mode: smoke test (1 eval per experiment)'));
+        }
+        if (options.force) {
+          console.log(chalk.yellow('  Force: re-run everything (ignoring fingerprints)'));
+        }
+        return;
+      }
+
+      // Run all experiments in parallel
+      let allPassed = true;
+      const experimentPromises = selectedFiles.map(async (file) => {
+        const configPath = resolve(experimentsDir, file);
+        const baseExperimentName = file.replace(/\.ts$/, '');
+
+        let config;
+        try {
+          config = await loadConfig(configPath);
+        } catch (err) {
+          console.error(chalk.red(`Failed to load ${file}: ${err instanceof Error ? err.message : err}`));
+          return;
+        }
+
+        const models = Array.isArray(config.model) ? config.model : [config.model];
+        const availableNames = fixtures.map((f) => f.name);
+        let evalNames: string[];
+        try {
+          evalNames = resolveEvalNames(config.evals, availableNames);
+        } catch {
+          evalNames = availableNames;
+        }
+
+        // Smoke mode: pick first eval
+        if (options.smoke) {
+          evalNames = [evalNames.sort()[0]];
+        }
+
+        const agent = getAgent(config.agent);
+        const apiKeyEnvVar = agent.getApiKeyEnvVar();
+        const apiKey = process.env[apiKeyEnvVar];
+        if (!apiKey) {
+          console.error(chalk.red(`${apiKeyEnvVar} not set, skipping ${baseExperimentName}`));
+          return;
+        }
+
+        for (const model of models) {
+          const experimentName = models.length > 1
+            ? `${baseExperimentName}/${model}`
+            : baseExperimentName;
+
+          const modelConfig = {
+            ...config,
+            model,
+            runs: options.smoke ? 1 : config.runs,
+          };
+
+          // Compute fingerprints
+          const selectedFixtures = fixtures.filter((f) => evalNames.includes(f.name));
+          const fingerprints: Record<string, string> = {};
+          for (const fixture of selectedFixtures) {
+            fingerprints[fixture.name] = computeFingerprint(fixture.path, modelConfig);
+          }
+
+          // Check for reusable results (unless --force)
+          let fixturesToRun = selectedFixtures;
+          if (!options.force) {
+            const reusable = scanReusableResults(resultsDir, experimentName, fingerprints);
+            if (reusable.size > 0) {
+              console.log(chalk.gray(`  ${experimentName}: reusing ${reusable.size} cached result(s)`));
+              fixturesToRun = selectedFixtures.filter((f) => !reusable.has(f.name));
+            }
+          }
+
+          if (fixturesToRun.length === 0) {
+            console.log(chalk.gray(`  ${experimentName}: all evals cached, skipping`));
+            continue;
+          }
+
+          console.log(chalk.blue(`\nRunning ${experimentName}: ${fixturesToRun.length} eval(s)`));
+
+          try {
+            const results = await runExperiment({
+              config: modelConfig,
+              fixtures: fixturesToRun,
+              apiKey,
+              resultsDir,
+              experimentName,
+              onProgress: (msg) => console.log(`  ${msg}`),
+            });
+
+            // Classify failures and check for auto-retry
+            const failedEvals = results.evals.filter((e) => e.passedRuns === 0);
+            if (failedEvals.length > 0 && !options.smoke) {
+              const classifications: Record<string, { failureType: string; failureReason: string }> = {};
+              const timestamp = results.startedAt.replace(/:/g, '-');
+
+              for (const evalSummary of failedEvals) {
+                const evalResultDir = resolve(resultsDir, experimentName, timestamp, evalSummary.name);
+                const classification = await classifyFailure(
+                  evalResultDir,
+                  evalSummary.name,
+                  experimentName
+                );
+                if (classification) {
+                  classifications[evalSummary.name] = classification;
+                  const icon = { model: '  ', infra: '  ', timeout: '  ' }[classification.failureType];
+                  console.log(chalk.gray(`  ${icon} ${evalSummary.name}: ${classification.failureType} — ${classification.failureReason}`));
+                }
+              }
+
+              // Auto-retry: if ALL failures are non-model, retry once
+              const classificationValues = Object.values(classifications);
+              if (
+                classificationValues.length === failedEvals.length &&
+                shouldRetry(classificationValues.map((c) => ({ failureType: c.failureType as 'model' | 'infra' | 'timeout', failureReason: c.failureReason })))
+              ) {
+                const retryFixtures = fixturesToRun.filter((f) =>
+                  failedEvals.some((e) => e.name === f.name)
+                );
+                console.log(chalk.yellow(`  Retrying ${retryFixtures.length} infra-failed eval(s)...`));
+                await runExperiment({
+                  config: modelConfig,
+                  fixtures: retryFixtures,
+                  apiKey,
+                  resultsDir,
+                  experimentName,
+                  onProgress: (msg) => console.log(`  [retry] ${msg}`),
+                });
+              }
+            }
+
+            const experimentPassed = results.evals.every((e) => e.passedRuns > 0);
+            if (!experimentPassed) allPassed = false;
+          } catch (err) {
+            console.error(chalk.red(`  Error running ${experimentName}: ${err instanceof Error ? err.message : err}`));
+            allPassed = false;
+          }
+
+          // Housekeeping after each experiment
+          const stats = housekeep(resultsDir, experimentName);
+          if (stats.removedDuplicates + stats.removedIncomplete > 0) {
+            console.log(
+              chalk.gray(
+                `  Housekeeping: removed ${stats.removedDuplicates} duplicate(s), ${stats.removedIncomplete} incomplete`
+              )
+            );
+          }
+        }
+      });
+
+      await Promise.all(experimentPromises);
+      process.exit(allPassed ? 0 : 1);
+    } catch (error) {
+      if (error instanceof Error) {
+        console.error(chalk.red(`Error: ${error.message}`));
+      } else {
+        console.error(chalk.red('An unknown error occurred'));
+      }
+      process.exit(1);
+    }
   });
 
 /**
