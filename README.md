@@ -23,89 +23,64 @@ cd my-agent-evals
 npm install
 
 # Add your API keys
-cp .env.example .env.local
-# Edit .env.local with your AI_GATEWAY_API_KEY and VERCEL_TOKEN
+cp .env.example .env
+# Edit .env with your AI_GATEWAY_API_KEY and VERCEL_TOKEN
 
 # Preview what will run (no API calls, no cost)
-npx @vercel/agent-eval cc --dry
+npx @vercel/agent-eval --dry
 
-# Run the evals
+# Run all experiments
+npx @vercel/agent-eval
+```
+
+## CLI
+
+### Run all experiments
+
+```bash
+npx @vercel/agent-eval
+```
+
+With no arguments, the CLI discovers every `experiments/*.ts` file and runs them all. Each experiment runs in parallel. Results with matching fingerprints are reused automatically (see [Result Reuse](#result-reuse)).
+
+### Run a single experiment
+
+```bash
 npx @vercel/agent-eval cc
 ```
 
-## A/B Testing AI Techniques
+The argument is the experiment filename without `.ts`. This resolves to `experiments/cc.ts`.
 
-The real power is comparing different approaches. Create multiple experiment configs:
+### Flags
 
-### Control: Baseline Agent
+| Flag | Description |
+|------|-------------|
+| `--dry` | Preview what would run without executing. No API calls, no cost. |
+| `--smoke` | Quick setup verification. Picks the first eval alphabetically, runs once per model. |
+| `--force` | Ignore cached fingerprints and re-run everything. Only applies when running all experiments. |
 
-```typescript
-// experiments/control.ts
-import type { ExperimentConfig } from '@vercel/agent-eval';
-
-const config: ExperimentConfig = {
-  agent: 'vercel-ai-gateway/claude-code',
-  model: 'opus',
-  runs: 10,        // Multiple runs for statistical significance
-  earlyExit: false, // Run all attempts to measure reliability
-};
-
-export default config;
-```
-
-### Treatment: Agent with MCP Server
-
-```typescript
-// experiments/with-mcp.ts
-import type { ExperimentConfig } from '@vercel/agent-eval';
-
-const config: ExperimentConfig = {
-  agent: 'vercel-ai-gateway/claude-code',
-  model: 'opus',
-  runs: 10,
-  earlyExit: false,
-
-  setup: async (sandbox) => {
-    // Install your framework's MCP server
-    await sandbox.runCommand('npm', ['install', '-g', '@myframework/mcp-server']);
-
-    // Configure Claude to use it
-    await sandbox.writeFiles({
-      '.claude/settings.json': JSON.stringify({
-        mcpServers: {
-          myframework: { command: 'myframework-mcp' }
-        }
-      })
-    });
-  },
-};
-
-export default config;
-```
-
-### Run Both & Compare
+Flags work with both modes:
 
 ```bash
-# Preview first
-npx @vercel/agent-eval control --dry
-npx @vercel/agent-eval with-mcp --dry
-
-# Run experiments
-npx @vercel/agent-eval control
-npx @vercel/agent-eval with-mcp
+npx @vercel/agent-eval --dry          # preview all experiments
+npx @vercel/agent-eval cc --dry       # preview a single experiment
+npx @vercel/agent-eval --smoke        # smoke test all experiments
+npx @vercel/agent-eval cc --smoke     # smoke test one experiment
 ```
 
-**Compare results:**
-```
-Control (baseline):     7/10 passed (70%)
-With MCP:              9/10 passed (90%)
+### Other commands
+
+```bash
+npx @vercel/agent-eval init <name>          # scaffold a new eval project
+npx @vercel/agent-eval playground           # launch web-based results viewer
+npx @vercel/agent-eval playground --watch   # live mode (watches for new results)
 ```
 
-## Creating Evals for Your Framework
+## Creating Evals
 
 Each eval tests one specific task an agent should be able to do with your framework.
 
-### Example: Testing Component Creation
+### Directory structure
 
 ```
 evals/
@@ -116,35 +91,8 @@ evals/
     src/                # Starter code
 ```
 
-### EVAL.ts vs EVAL.tsx
+**PROMPT.md** -- what you want the agent to do:
 
-Use **EVAL.tsx** when your tests require JSX syntax (React Testing Library, component testing):
-```typescript
-// EVAL.tsx - use when testing React components
-import { test, expect } from 'vitest';
-import { render, screen } from '@testing-library/react';
-import { Button } from './src/components/Button';
-
-test('Button renders with label', () => {
-  render(<Button label="Click me" onClick={() => {}} />);
-  expect(screen.getByText('Click me')).toBeDefined();
-});
-```
-
-Use **EVAL.ts** for tests that don't need JSX:
-```typescript
-// EVAL.ts - use for file checks, build tests, etc.
-import { test, expect } from 'vitest';
-import { existsSync } from 'fs';
-
-test('Button component exists', () => {
-  expect(existsSync('src/components/Button.tsx')).toBe(true);
-});
-```
-
-> **Note:** You only need one eval file per fixture. Choose `.tsx` if any test needs JSX, otherwise use `.ts`.
-
-**PROMPT.md** - What you want the agent to do:
 ```markdown
 Create a Button component using MyFramework.
 
@@ -154,7 +102,8 @@ Requirements:
 - Use the framework's styling system for hover states
 ```
 
-**EVAL.ts** (or **EVAL.tsx**) - How you verify it worked:
+**EVAL.ts** -- how you verify it worked:
+
 ```typescript
 import { test, expect } from 'vitest';
 import { readFileSync, existsSync } from 'fs';
@@ -175,36 +124,61 @@ test('project builds', () => {
 });
 ```
 
-**package.json** - Include your framework:
-```json
-{
-  "name": "create-button-component",
-  "type": "module",
-  "scripts": { "build": "tsc" },
-  "dependencies": {
-    "myframework": "^2.0.0"
-  }
-}
-```
-
-## Experiment Ideas
-
-| Experiment | Control | Treatment |
-|------------|---------|-----------|
-| MCP impact | No MCP | With MCP server |
-| Model comparison | Haiku | Sonnet / Opus |
-| Documentation | Minimal docs | Rich examples |
-| System prompt | Default | Framework-specific |
-| Tool availability | Read/write only | + custom tools |
+Use **EVAL.tsx** when your tests require JSX syntax (React Testing Library, component rendering). You only need one eval file per fixture -- choose `.tsx` if any test needs JSX.
 
 ## Configuration Reference
 
-### Agent Selection
-
-Choose your agent and authentication method:
+### Experiment config
 
 ```typescript
-// Vercel AI Gateway (recommended - unified billing & observability)
+// experiments/my-experiment.ts
+import type { ExperimentConfig } from '@vercel/agent-eval';
+
+const config: ExperimentConfig = {
+  // Required: which agent to use
+  agent: 'vercel-ai-gateway/claude-code',
+
+  // Model to use (defaults vary by agent)
+  // Provide an array to run the same experiment across multiple models.
+  model: 'opus',
+
+  // How many times to run each eval (default: 1)
+  runs: 10,
+
+  // Stop after first success? (default: true)
+  earlyExit: false,
+
+  // npm scripts that must pass after agent finishes (default: [])
+  scripts: ['build', 'lint'],
+
+  // Timeout per run in seconds (default: 600)
+  timeout: 600,
+
+  // Filter which evals to run (default: '*' for all)
+  evals: '*',
+  // evals: ['specific-eval'],
+  // evals: (name) => name.startsWith('api-'),
+
+  // Setup function for sandbox pre-configuration
+  setup: async (sandbox) => {
+    await sandbox.writeFiles({ '.env': 'API_KEY=test' });
+    await sandbox.runCommand('npm', ['run', 'setup']);
+  },
+
+  // Rewrite the prompt before running
+  editPrompt: (prompt) => `Use the skill.\n\n${prompt}`,
+
+  // Sandbox backend (default: 'auto' -- Vercel if token present, else Docker)
+  sandbox: 'auto',
+};
+
+export default config;
+```
+
+### Agent selection
+
+```typescript
+// Vercel AI Gateway (recommended -- unified billing and observability)
 agent: 'vercel-ai-gateway/claude-code'  // Claude Code via AI Gateway
 agent: 'vercel-ai-gateway/codex'        // OpenAI Codex via AI Gateway
 agent: 'vercel-ai-gateway/opencode'     // OpenCode via AI Gateway
@@ -214,131 +188,88 @@ agent: 'claude-code'  // requires ANTHROPIC_API_KEY
 agent: 'codex'        // requires OPENAI_API_KEY
 ```
 
-See the Environment Variables section below for setup instructions.
+### Multi-model experiments
 
-### OpenCode Model Configuration
-
-OpenCode uses Vercel AI Gateway exclusively. Models **must** be specified with the `vercel/{provider}/{model}` format:
+Provide an array of models to run the same experiment on each one. Results are stored under separate directories (`experiment-name/model-name`):
 
 ```typescript
-// Anthropic models
+const config: ExperimentConfig = {
+  agent: 'vercel-ai-gateway/claude-code',
+  model: ['opus', 'sonnet'],
+  runs: 10,
+};
+```
+
+### OpenCode model format
+
+OpenCode uses Vercel AI Gateway exclusively. Models must use the `vercel/{provider}/{model}` format:
+
+```typescript
 model: 'vercel/anthropic/claude-sonnet-4'
-model: 'vercel/anthropic/claude-opus-4'
-
-// Minimax models
-model: 'vercel/minimax/minimax-m2.1'
-model: 'vercel/minimax/minimax-m2.1-lightning'
-
-// Moonshot AI (Kimi) models
-model: 'vercel/moonshotai/kimi-k2'
-model: 'vercel/moonshotai/kimi-k2-thinking'
-
-// OpenAI models
 model: 'vercel/openai/gpt-4o'
-model: 'vercel/openai/o3'
+model: 'vercel/moonshotai/kimi-k2'
+model: 'vercel/minimax/minimax-m2.1'
 ```
 
-> **Important:** The `vercel/` prefix is required. OpenCode's config sets up a `vercel` provider, so the model string must start with `vercel/` to route through Vercel AI Gateway correctly. Using just `anthropic/claude-sonnet-4` (without the `vercel/` prefix) will fail with a "provider not found" error.
+The `vercel/` prefix is required. Using `anthropic/claude-sonnet-4` (without `vercel/`) will fail with a "provider not found" error.
 
-Under the hood, the agent creates an `opencode.json` config file that configures the Vercel provider:
+## A/B Testing
 
-```json
-{
-  "provider": {
-    "vercel": {
-      "options": {
-        "apiKey": "{env:AI_GATEWAY_API_KEY}"
-      }
-    }
-  },
-  "permission": {
-    "write": "allow",
-    "edit": "allow",
-    "bash": "allow"
-  }
-}
-```
-
-And runs: `opencode run "<prompt>" --model {provider}/{model} --format json`
-
-### Full Configuration
+The real power is comparing different approaches. Create multiple experiment configs:
 
 ```typescript
+// experiments/control.ts
 import type { ExperimentConfig } from '@vercel/agent-eval';
 
 const config: ExperimentConfig = {
-  // Required: which agent and authentication to use
   agent: 'vercel-ai-gateway/claude-code',
-
-  // Model to use (defaults vary by agent)
-  // - claude-code: 'opus'
-  // - codex: 'openai/gpt-5.2-codex'
-  // - opencode: 'vercel/anthropic/claude-sonnet-4' (note: vercel/ prefix required)
-  // Provide an array to run the same experiment across multiple models.
-  model: ['opus', 'sonnet'],
-
-  // How many times to run each eval
+  model: 'opus',
   runs: 10,
-
-  // Stop after first success? (false for reliability measurement)
   earlyExit: false,
-
-  // npm scripts that must pass after agent finishes
-  scripts: ['build', 'lint'],
-
-  // Timeout per run in seconds (default: 600)
-  timeout: 600,
-
-  // Filter which evals to run (pick one)
-  evals: '*',                                // all (default)
-  // evals: ['specific-eval'],              // by name
-  // evals: (name) => name.startsWith('api-'), // by function
-
-  // Setup function for environment configuration
-  setup: async (sandbox) => {
-    await sandbox.writeFiles({ '.env': 'API_KEY=test' });
-    await sandbox.runCommand('npm', ['run', 'setup']);
-  },
-
-  // Optional hook to rewrite the prompt before running.
-  // Useful for appending instructions like "use the skill"
-  // or wrapping the prompt in an MCP template.
-  editPrompt: (prompt: string) => `Use the skill.\n\n${prompt}`,
 };
 
 export default config;
 ```
 
-## CLI Commands
+```typescript
+// experiments/with-mcp.ts
+import type { ExperimentConfig } from '@vercel/agent-eval';
 
-### `init <name>`
+const config: ExperimentConfig = {
+  agent: 'vercel-ai-gateway/claude-code',
+  model: 'opus',
+  runs: 10,
+  earlyExit: false,
+  setup: async (sandbox) => {
+    await sandbox.runCommand('npm', ['install', '-g', '@myframework/mcp-server']);
+    await sandbox.writeFiles({
+      '.claude/settings.json': JSON.stringify({
+        mcpServers: { myframework: { command: 'myframework-mcp' } }
+      })
+    });
+  },
+};
 
-Create a new eval project:
-```bash
-npx @vercel/agent-eval init my-evals
+export default config;
 ```
 
-### `<experiment>`
-
-Run an experiment:
 ```bash
-npx @vercel/agent-eval cc
+npx @vercel/agent-eval
 ```
 
-**Dry run** - preview without executing (no API calls, no cost):
-```bash
-npx @vercel/agent-eval cc --dry
-
-# Output:
-# Found 5 valid fixture(s), will run 5:
-#   - create-button
-#   - add-routing
-#   - setup-state
-#   - ...
-# Running 5 eval(s) x 10 run(s) = 50 total runs
-# Agent: claude-code, Model: opus, Timeout: 300s
-# [DRY RUN] Would execute evals here
+Compare the results:
 ```
+control (baseline):     7/10 passed (70%)
+with-mcp:              9/10 passed (90%)
+```
+
+| Experiment | Control | Treatment |
+|------------|---------|-----------|
+| MCP impact | No MCP | With MCP server |
+| Model comparison | Haiku | Sonnet / Opus |
+| Documentation | Minimal docs | Rich examples |
+| System prompt | Default | Framework-specific |
+| Tool availability | Read/write only | + custom tools |
 
 ## Results
 
@@ -348,21 +279,46 @@ Results are saved to `results/<experiment>/<timestamp>/`:
 results/
   with-mcp/
     2026-01-27T10-30-00Z/
-      experiment.json       # Config and summary
       create-button/
-        summary.json        # { totalRuns: 10, passedRuns: 9, passRate: "90%" }
+        summary.json            # Pass rate, fingerprint, classification
+        classification.json     # Cached failure classification (if failed)
         run-1/
-          result.json       # Individual run result
-          transcript.jsonl  # Agent conversation
-          outputs/          # Test/script output
+          result.json           # Individual run result + o11y summary
+          transcript.json       # Parsed/structured agent transcript
+          transcript-raw.jsonl  # Raw agent output (for debugging)
+          outputs/
+            eval.txt            # EVAL.ts test output
+            scripts/
+              build.txt         # npm script output
 ```
+
+### summary.json
+
+Each eval directory contains a `summary.json` with:
+
+```json
+{
+  "totalRuns": 2,
+  "passedRuns": 0,
+  "passRate": "0%",
+  "meanDuration": 45.2,
+  "fingerprint": "a1b2c3...",
+  "classification": {
+    "failureType": "infra",
+    "failureReason": "Rate limited (HTTP 429) — model never ran"
+  },
+  "valid": false
+}
+```
+
+The `fingerprint` field enables result reuse across runs. The `classification` and `valid` fields appear only for failed evals -- `valid: false` marks non-model failures so they are not reused by fingerprinting and are automatically retried.
 
 ### Playground UI
 
 Browse results in a web-based dashboard:
 
 ```bash
-npx @vercel/agent-eval-playground
+npx @vercel/agent-eval playground
 ```
 
 This opens a local Next.js app with:
@@ -373,72 +329,61 @@ This opens a local Next.js app with:
 
 Options:
 ```bash
-npx @vercel/agent-eval-playground --results-dir ./results --evals-dir ./evals --port 3001
+npx @vercel/agent-eval playground --results-dir ./results --evals-dir ./evals --port 3001
 ```
 
-### Analyzing Results
+## Result Reuse
 
-```bash
-# Quick comparison
-cat results/control/*/experiment.json | jq '.evals[] | {name, passRate}'
-cat results/with-mcp/*/experiment.json | jq '.evals[] | {name, passRate}'
-```
+The framework computes a SHA-256 fingerprint for each (eval, config) pair. The fingerprint covers all eval directory files and the config fields that affect results: `agent`, `model`, `scripts`, `timeout`, `earlyExit`, and `runs`.
 
-| Pass Rate | Interpretation |
-|-----------|----------------|
-| 90-100%   | Agent handles this reliably |
-| 70-89%    | Usually works, room for improvement |
-| 50-69%    | Unreliable, needs investigation |
-| < 50%     | Task too hard or prompt needs work |
+On subsequent runs, evals with a matching fingerprint and a valid cached result (at least one passing run) are skipped automatically. This means:
+
+- **Adding new evals** -- safe, no existing results to invalidate.
+- **Extending the model array** -- safe, each model gets its own experiment directory.
+- **Changing the `evals` filter** -- safe, the filter is not part of the fingerprint.
+- **Editing an eval file** -- only invalidates that specific eval.
+- **Changing config fields** (agent, model, timeout, etc.) -- invalidates all evals in that experiment.
+
+Use `--force` to bypass fingerprinting and re-run everything. Functions like `setup` and `editPrompt` cannot be hashed, so use `--force` when you change those.
+
+## Failure Classification
+
+When evals fail, the framework classifies each failure as one of:
+
+- **model** -- the agent tried but wrote incorrect code
+- **infra** -- infrastructure broke (API errors, rate limits, crashes)
+- **timeout** -- the run hit its time limit
+
+Classification uses Claude Sonnet 4.5 via the Vercel AI Gateway with sandboxed read-only tools to inspect result files. This requires `AI_GATEWAY_API_KEY` to be set. Classifications are cached in `classification.json` within the eval result directory.
+
+### Auto-retry
+
+When ALL runs of an eval fail with non-model failures (infra or timeout), the framework automatically retries once. This handles transient issues like rate limits or API outages without wasting retries on genuine model failures.
+
+## Housekeeping
+
+After each experiment completes, the framework automatically:
+- Removes duplicate results for the same eval (keeps the newest)
+- Removes incomplete results (missing `summary.json` or transcripts)
+- Removes empty timestamp directories
 
 ## Environment Variables
 
-Every run requires **two things**: an API key for the agent and a token for the Vercel sandbox. The exact variables depend on which authentication mode you use.
+Every run requires an API key for the agent and a token for the sandbox.
 
 | Variable | Required when | Description |
 |---|---|---|
-| `AI_GATEWAY_API_KEY` | Always | Vercel AI Gateway key — required for failure classification (and for `vercel-ai-gateway/` agents) |
-| `ANTHROPIC_API_KEY` | `agent: 'claude-code'` | Direct Anthropic API key (`sk-ant-...`) |
-| `OPENAI_API_KEY` | `agent: 'codex'` | Direct OpenAI API key (`sk-proj-...`) |
-| `VERCEL_TOKEN` | Always (pick one) | Vercel personal access token — for local dev |
-| `VERCEL_OIDC_TOKEN` | Always (pick one) | Vercel OIDC token — for CI/CD pipelines |
+| `AI_GATEWAY_API_KEY` | Always | Vercel AI Gateway key -- required for failure classification and for `vercel-ai-gateway/` agents |
+| `ANTHROPIC_API_KEY` | `agent: 'claude-code'` | Direct Anthropic API key |
+| `OPENAI_API_KEY` | `agent: 'codex'` | Direct OpenAI API key |
+| `VERCEL_TOKEN` | Always (pick one) | Vercel personal access token -- for local dev |
+| `VERCEL_OIDC_TOKEN` | Always (pick one) | Vercel OIDC token -- for CI/CD pipelines |
 
-> **Note:** `AI_GATEWAY_API_KEY` is always required, even when using direct API agents like `claude-code` or `codex`. The framework uses it to classify failures (model vs infra vs timeout) via `anthropic/claude-sonnet-4-5` on the AI Gateway.
+`AI_GATEWAY_API_KEY` is always required, even when using direct API agents like `claude-code` or `codex`. The framework uses it to classify failures via `anthropic/claude-sonnet-4-5` on the AI Gateway.
 
-> **Note:** OpenCode only supports Vercel AI Gateway (`vercel-ai-gateway/opencode`). There is no direct API option for OpenCode.
+OpenCode only supports Vercel AI Gateway (`vercel-ai-gateway/opencode`). There is no direct API option for OpenCode.
 
-> You always need **one agent key** + **one sandbox token**.
-
-### Vercel AI Gateway (Recommended)
-
-Use `vercel-ai-gateway/` prefixed agents. One key for all models.
-
-```bash
-# Agent access — get yours at https://vercel.com/dashboard -> AI Gateway
-AI_GATEWAY_API_KEY=your-ai-gateway-api-key
-
-# Sandbox access — create at https://vercel.com/account/tokens
-VERCEL_TOKEN=your-vercel-token
-# OR for CI/CD:
-# VERCEL_OIDC_TOKEN=your-oidc-token
-```
-
-### Direct API Keys (Alternative)
-
-Remove the `vercel-ai-gateway/` prefix and use provider keys directly:
-
-```bash
-# For agent: 'claude-code'
-ANTHROPIC_API_KEY=sk-ant-...
-
-# For agent: 'codex'
-OPENAI_API_KEY=sk-proj-...
-
-# Sandbox access is still required
-VERCEL_TOKEN=your-vercel-token
-```
-
-### `.env` Setup
+### Setup
 
 The `init` command generates a `.env.example` file. Copy it and fill in your keys:
 
@@ -446,25 +391,32 @@ The `init` command generates a `.env.example` file. Copy it and fill in your key
 cp .env.example .env
 ```
 
-The framework loads `.env` automatically via [dotenv](https://github.com/motdotla/dotenv).
+The framework loads `.env.local` first, then `.env` as a fallback, via [dotenv](https://github.com/motdotla/dotenv).
 
-### Vercel Employees
+### Vercel AI Gateway (recommended)
 
-**To get the environment variables, link to `vercel-labs/agent-eval` on Vercel:**
+One key for all models:
 
 ```bash
-# Link to the vercel-labs/agent-eval project
-vc link vercel-labs/agent-eval
-
-# Pull environment variables
-vc env pull
+AI_GATEWAY_API_KEY=your-ai-gateway-api-key
+VERCEL_TOKEN=your-vercel-token
 ```
 
-This writes a `.env.local` file with all the required environment variables (AI_GATEWAY_API_KEY, ANTHROPIC_API_KEY, OPENAI_API_KEY, VERCEL_OIDC_TOKEN) — no manual key setup needed. The framework automatically loads from both `.env` and `.env.local`.
+### Direct API keys (alternative)
+
+Remove the `vercel-ai-gateway/` prefix from the agent and use provider keys:
+
+```bash
+ANTHROPIC_API_KEY=sk-ant-...
+OPENAI_API_KEY=sk-proj-...
+VERCEL_TOKEN=your-vercel-token
+```
 
 ## Tips
 
 **Start with `--dry`**: Always preview before running to verify your config and avoid unexpected costs.
+
+**Use `--smoke` first**: Verify API keys, model IDs, and sandbox connectivity before launching a full run.
 
 **Use multiple runs**: Single runs don't tell you reliability. Use `runs: 10` and `earlyExit: false` for meaningful data.
 
