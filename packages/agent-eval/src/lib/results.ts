@@ -185,14 +185,16 @@ export function saveResults(
           outputPaths.eval = './outputs/eval.txt';
         }
 
-        // Save npm script outputs (nested to avoid collision)
+        // Save npm script outputs under outputs/scripts/ to avoid collision with eval.txt
         if (runData.outputContent.scripts) {
+          const scriptsDir = join(outputsDir, 'scripts');
+          mkdirSync(scriptsDir, { recursive: true });
           outputPaths.scripts = {};
           for (const [name, content] of Object.entries(runData.outputContent.scripts)) {
             if (content) {
               const fileName = `${name}.txt`;
-              writeFileSync(join(outputsDir, fileName), content);
-              outputPaths.scripts[name] = `./outputs/${fileName}`;
+              writeFileSync(join(scriptsDir, fileName), content);
+              outputPaths.scripts[name] = `./outputs/scripts/${fileName}`;
             }
           }
         }

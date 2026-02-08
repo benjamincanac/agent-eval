@@ -157,10 +157,10 @@ describe('results utilities', () => {
       expect(existsSync(join(outputDir, 'eval-1', 'run-2', 'transcript.json'))).toBe(false);
       expect(existsSync(join(outputDir, 'eval-1', 'run-2', 'transcript-raw.jsonl'))).toBe(false);
 
-      // Check outputs/ directory exists and contains script output files
+      // Check outputs/ directory exists and contains test output + script outputs
       expect(existsSync(join(outputDir, 'eval-1', 'run-1', 'outputs'))).toBe(true);
       expect(existsSync(join(outputDir, 'eval-1', 'run-1', 'outputs', 'eval.txt'))).toBe(true);
-      expect(existsSync(join(outputDir, 'eval-1', 'run-1', 'outputs', 'build.txt'))).toBe(true);
+      expect(existsSync(join(outputDir, 'eval-1', 'run-1', 'outputs', 'scripts', 'build.txt'))).toBe(true);
 
       // Verify output file content
       const testsOutput = readFileSync(
@@ -170,7 +170,7 @@ describe('results utilities', () => {
       expect(testsOutput).toBe('Test output here');
 
       const buildOutput = readFileSync(
-        join(outputDir, 'eval-1', 'run-1', 'outputs', 'build.txt'),
+        join(outputDir, 'eval-1', 'run-1', 'outputs', 'scripts', 'build.txt'),
         'utf-8'
       );
       expect(buildOutput).toBe('Build output here');
@@ -199,7 +199,7 @@ describe('results utilities', () => {
       expect(resultJson.outputPaths).toEqual({
         eval: './outputs/eval.txt',
         scripts: {
-          build: './outputs/build.txt',
+          build: './outputs/scripts/build.txt',
         },
       });
       // Should NOT have raw content
@@ -222,6 +222,55 @@ describe('results utilities', () => {
       expect(parsedTranscript).toHaveProperty('agent');
       expect(parsedTranscript).toHaveProperty('events');
       expect(parsedTranscript).toHaveProperty('summary');
+    });
+
+    it('does not collide when script is named "eval"', () => {
+      const config: ResolvedExperimentConfig = {
+        agent: 'claude-code',
+        model: 'opus',
+        evals: ['eval-1'],
+        runs: 1,
+        earlyExit: true,
+        scripts: ['eval'],
+        timeout: 300,
+      };
+
+      const evals = [
+        createEvalSummary('eval-1', [
+          {
+            result: { status: 'passed', duration: 10 },
+            outputContent: {
+              eval: 'EVAL.ts test output',
+              scripts: { eval: 'npm run eval output' },
+            },
+          },
+        ]),
+      ];
+
+      const results = createExperimentResults(
+        config,
+        evals,
+        new Date('2024-01-26T12:00:00Z'),
+        new Date('2024-01-26T12:01:00Z')
+      );
+
+      const outputDir = saveResults(results, {
+        resultsDir: TEST_DIR,
+        experimentName: 'collision-test',
+      });
+
+      // Both files should exist and have different content
+      const evalTestOutput = readFileSync(
+        join(outputDir, 'eval-1', 'run-1', 'outputs', 'eval.txt'),
+        'utf-8'
+      );
+      expect(evalTestOutput).toBe('EVAL.ts test output');
+
+      const evalScriptOutput = readFileSync(
+        join(outputDir, 'eval-1', 'run-1', 'outputs', 'scripts', 'eval.txt'),
+        'utf-8'
+      );
+      expect(evalScriptOutput).toBe('npm run eval output');
     });
   });
 
