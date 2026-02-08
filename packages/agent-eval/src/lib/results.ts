@@ -2,7 +2,7 @@
  * Results storage and reporting for eval experiments.
  */
 
-import { mkdirSync, writeFileSync } from 'fs';
+import { mkdirSync, writeFileSync, readdirSync, readFileSync, existsSync, statSync } from 'fs';
 import { join } from 'path';
 import chalk from 'chalk';
 import type {
@@ -91,6 +91,8 @@ export interface SaveResultsOptions {
   resultsDir: string;
   /** Experiment name (used for subdirectory) */
   experimentName: string;
+  /** Per-eval fingerprints (eval name -> fingerprint hash) */
+  fingerprints?: Record<string, string>;
 }
 
 /**
@@ -124,12 +126,16 @@ export function saveResults(
     mkdirSync(evalDir, { recursive: true });
 
     // Save summary (simplified format per design)
-    const summaryForFile = {
+    const fingerprint = options.fingerprints?.[evalSummary.name];
+    const summaryForFile: Record<string, unknown> = {
       totalRuns: evalSummary.totalRuns,
       passedRuns: evalSummary.passedRuns,
       passRate: `${evalSummary.passRate.toFixed(0)}%`,
       meanDuration: evalSummary.meanDuration,
     };
+    if (fingerprint) {
+      summaryForFile.fingerprint = fingerprint;
+    }
     writeFileSync(
       join(evalDir, 'summary.json'),
       JSON.stringify(summaryForFile, null, 2)
@@ -289,4 +295,92 @@ export function createProgressDisplay(
   totalRuns: number
 ): string {
   return chalk.blue(`Running ${evalName} [${runNumber}/${totalRuns}]...`);
+}
+
+/**
+ * A reusable result found by the scanner.
+ */
+export interface ReusableResult {
+  evalName: string;
+  fingerprint: string;
+  passRate: string;
+  timestamp: string;
+}
+
+/**
+ * Scan existing results for an experiment to find reusable eval results.
+ *
+ * A result is reusable if:
+ * 1. Its fingerprint matches the current fingerprint
+ * 2. It is "valid" (not marked as invalid by the classifier)
+ * 3. It has passedRuns > 0 (successful result worth reusing)
+ *
+ * Scans all timestamps newest-first and returns the latest match per eval.
+ */
+export function scanReusableResults(
+  resultsDir: string,
+  experimentName: string,
+  fingerprints: Record<string, string>
+): Map<string, ReusableResult> {
+  const reusable = new Map<string, ReusableResult>();
+  const experimentDir = join(resultsDir, experimentName);
+
+  if (!existsSync(experimentDir)) return reusable;
+
+  // Get all timestamps, sorted newest first
+  let timestamps: string[];
+  try {
+    timestamps = readdirSync(experimentDir)
+      .filter((t) => !t.startsWith('.'))
+      .sort()
+      .reverse();
+  } catch {
+    return reusable;
+  }
+
+  for (const timestamp of timestamps) {
+    const tsDir = join(experimentDir, timestamp);
+    if (!statSync(tsDir).isDirectory()) continue;
+
+    let evalDirs: string[];
+    try {
+      evalDirs = readdirSync(tsDir).filter((d) => !d.startsWith('.'));
+    } catch {
+      continue;
+    }
+
+    for (const evalDir of evalDirs) {
+      // Already found a reusable result for this eval
+      if (reusable.has(evalDir)) continue;
+
+      // Check if we have a fingerprint for this eval
+      const expectedFingerprint = fingerprints[evalDir];
+      if (!expectedFingerprint) continue;
+
+      const summaryPath = join(tsDir, evalDir, 'summary.json');
+      try {
+        const summary = JSON.parse(readFileSync(summaryPath, 'utf-8'));
+
+        // Check fingerprint match
+        if (summary.fingerprint !== expectedFingerprint) continue;
+
+        // Check validity (valid defaults to true if not explicitly set to false)
+        if (summary.valid === false) continue;
+
+        // Check that it has at least some passed runs
+        if (summary.passedRuns <= 0) continue;
+
+        reusable.set(evalDir, {
+          evalName: evalDir,
+          fingerprint: summary.fingerprint,
+          passRate: summary.passRate,
+          timestamp,
+        });
+      } catch {
+        // Skip invalid summaries
+      }
+    }
+  }
+
+  return reusable;
 }

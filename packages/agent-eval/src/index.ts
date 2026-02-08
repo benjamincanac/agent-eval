@@ -77,7 +77,7 @@ export type { Agent, ScriptResult } from './lib/agents/types.js';
 export { getAgent, listAgents, registerAgent } from './lib/agents/index.js';
 
 // Re-export results utilities
-export type { SaveResultsOptions } from './lib/results.js';
+export type { SaveResultsOptions, ReusableResult } from './lib/results.js';
 export {
   agentResultToEvalRunData,
   createEvalSummary,
@@ -86,7 +86,11 @@ export {
   formatResultsTable,
   formatRunResult,
   createProgressDisplay,
+  scanReusableResults,
 } from './lib/results.js';
+
+// Re-export fingerprinting
+export { computeFingerprint } from './lib/fingerprint.js';
 
 // Re-export runner utilities
 export type { RunExperimentOptions } from './lib/runner.js';
