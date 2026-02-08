@@ -93,6 +93,10 @@ export interface SaveResultsOptions {
   experimentName: string;
   /** Per-eval fingerprints (eval name -> fingerprint hash) */
   fingerprints?: Record<string, string>;
+  /** Per-eval classification results (eval name -> classification) */
+  classifications?: Record<string, { failureType: string; failureReason: string }>;
+  /** Per-eval validity flags (eval name -> valid). Defaults to true. */
+  validity?: Record<string, boolean>;
 }
 
 /**
@@ -127,6 +131,8 @@ export function saveResults(
 
     // Save summary (simplified format per design)
     const fingerprint = options.fingerprints?.[evalSummary.name];
+    const classification = options.classifications?.[evalSummary.name];
+    const valid = options.validity?.[evalSummary.name];
     const summaryForFile: Record<string, unknown> = {
       totalRuns: evalSummary.totalRuns,
       passedRuns: evalSummary.passedRuns,
@@ -135,6 +141,12 @@ export function saveResults(
     };
     if (fingerprint) {
       summaryForFile.fingerprint = fingerprint;
+    }
+    if (classification) {
+      summaryForFile.classification = classification;
+    }
+    if (valid === false) {
+      summaryForFile.valid = false;
     }
     writeFileSync(
       join(evalDir, 'summary.json'),

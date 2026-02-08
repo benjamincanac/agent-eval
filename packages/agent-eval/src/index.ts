@@ -18,6 +18,8 @@ export type {
   EvalRunData,
   EvalSummary,
   ExperimentResults,
+  FailureType,
+  Classification,
 } from './lib/types.js';
 
 // Re-export constants
@@ -91,6 +93,13 @@ export {
 
 // Re-export fingerprinting
 export { computeFingerprint } from './lib/fingerprint.js';
+
+// Re-export classifier
+export {
+  classifyFailure,
+  classifyWithAI,
+  shouldRetry,
+} from './lib/classifier.js';
 
 // Re-export runner utilities
 export type { RunExperimentOptions } from './lib/runner.js';

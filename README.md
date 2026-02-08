@@ -397,11 +397,13 @@ Every run requires **two things**: an API key for the agent and a token for the 
 
 | Variable | Required when | Description |
 |---|---|---|
-| `AI_GATEWAY_API_KEY` | `agent: 'vercel-ai-gateway/...'` | Vercel AI Gateway key — works for all agents (claude-code, codex, opencode) |
+| `AI_GATEWAY_API_KEY` | Always | Vercel AI Gateway key — required for failure classification (and for `vercel-ai-gateway/` agents) |
 | `ANTHROPIC_API_KEY` | `agent: 'claude-code'` | Direct Anthropic API key (`sk-ant-...`) |
 | `OPENAI_API_KEY` | `agent: 'codex'` | Direct OpenAI API key (`sk-proj-...`) |
 | `VERCEL_TOKEN` | Always (pick one) | Vercel personal access token — for local dev |
 | `VERCEL_OIDC_TOKEN` | Always (pick one) | Vercel OIDC token — for CI/CD pipelines |
+
+> **Note:** `AI_GATEWAY_API_KEY` is always required, even when using direct API agents like `claude-code` or `codex`. The framework uses it to classify failures (model vs infra vs timeout) via `anthropic/claude-sonnet-4-5` on the AI Gateway.
 
 > **Note:** OpenCode only supports Vercel AI Gateway (`vercel-ai-gateway/opencode`). There is no direct API option for OpenCode.
 
