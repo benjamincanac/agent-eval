@@ -265,16 +265,11 @@ program
   });
 
 /**
- * run-all command - discover and run all experiments
+ * Run-all handler: discover and run all experiments with fingerprint reuse,
+ * classification, and auto-retry. Used by both `run-all` subcommand and
+ * the default (no-args) invocation.
  */
-program
-  .command('run-all')
-  .description('Discover and run all experiments, with fingerprint reuse, classification, and auto-retry')
-  .argument('[experiments...]', 'Experiment names or glob patterns (default: all)')
-  .option('--dry', 'Preview what would run without executing')
-  .option('--force', 'Ignore fingerprints, re-run everything')
-  .option('--smoke', 'Run 1 eval per experiment for sanity checking')
-  .action(async (experimentArgs: string[], options: { dry?: boolean; force?: boolean; smoke?: boolean }) => {
+async function runAllCommand(experimentArgs: string[], options: { dry?: boolean; force?: boolean; smoke?: boolean }) {
     try {
       const projectDir = process.cwd();
       const experimentsDir = resolve(projectDir, 'experiments');
@@ -490,19 +485,35 @@ program
       }
       process.exit(1);
     }
-  });
+}
 
 /**
- * Default command - run experiment (no subcommand needed)
- * Usage: agent-eval cc --dry
+ * run-all subcommand (explicit)
  */
 program
-  .argument('[config]', 'Experiment name (e.g., "cc") or path')
+  .command('run-all')
+  .description('Discover and run all experiments, with fingerprint reuse, classification, and auto-retry')
+  .argument('[experiments...]', 'Experiment names or glob patterns (default: all)')
+  .option('--dry', 'Preview what would run without executing')
+  .option('--force', 'Ignore fingerprints, re-run everything')
+  .option('--smoke', 'Run 1 eval per experiment for sanity checking')
+  .action(runAllCommand);
+
+/**
+ * Default command - run a single experiment, or run-all if no args given.
+ * Usage:
+ *   agent-eval           # runs all experiments (same as run-all)
+ *   agent-eval cc        # runs single experiment
+ *   agent-eval cc --dry  # preview single experiment
+ */
+program
+  .argument('[config]', 'Experiment name (e.g., "cc") or path. Omit to run all experiments.')
   .option('--dry', 'Preview what would run without executing')
   .option('--smoke', 'Run a single eval to verify setup (API keys, model IDs, sandbox)')
-  .action(async (configInput: string | undefined, options: { dry?: boolean; smoke?: boolean }) => {
+  .option('--force', 'Ignore fingerprints, re-run everything (only applies when running all)')
+  .action(async (configInput: string | undefined, options: { dry?: boolean; smoke?: boolean; force?: boolean }) => {
     if (!configInput) {
-      program.help();
+      await runAllCommand([], options);
       return;
     }
     await runExperimentCommand(configInput, options);
