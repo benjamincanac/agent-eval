@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { mkdirSync, rmSync, existsSync, readFileSync } from 'fs';
 import { join } from 'path';
+import { writeFileSync } from 'fs';
 import {
   agentResultToEvalRunData,
   createEvalSummary,
@@ -8,6 +9,7 @@ import {
   saveResults,
   formatResultsTable,
   formatRunResult,
+  scanReusableResults,
 } from './results.js';
 import type { AgentRunResult } from './agents/types.js';
 import type { EvalRunResult, EvalRunData, ResolvedExperimentConfig } from './types.js';
@@ -335,6 +337,79 @@ describe('results utilities', () => {
       expect(formatted).toContain('failing-eval');
       expect(formatted).toContain('3/10');
       expect(formatted).toContain('Test assertion failed');
+    });
+  });
+
+  describe('scanReusableResults', () => {
+    it('finds reusable results with matching fingerprint', () => {
+      // Create a fake result directory
+      const expDir = join(TEST_DIR, 'my-exp', '2024-01-26T12-00-00.000Z', 'eval-1');
+      mkdirSync(expDir, { recursive: true });
+      writeFileSync(
+        join(expDir, 'summary.json'),
+        JSON.stringify({ totalRuns: 2, passedRuns: 1, passRate: '50%', meanDuration: 10, fingerprint: 'abc123' })
+      );
+
+      const result = scanReusableResults(TEST_DIR, 'my-exp', { 'eval-1': 'abc123' });
+      expect(result.size).toBe(1);
+      expect(result.get('eval-1')?.fingerprint).toBe('abc123');
+    });
+
+    it('skips results with mismatched fingerprint', () => {
+      const expDir = join(TEST_DIR, 'my-exp', '2024-01-26T12-00-00.000Z', 'eval-1');
+      mkdirSync(expDir, { recursive: true });
+      writeFileSync(
+        join(expDir, 'summary.json'),
+        JSON.stringify({ totalRuns: 2, passedRuns: 1, passRate: '50%', meanDuration: 10, fingerprint: 'old-hash' })
+      );
+
+      const result = scanReusableResults(TEST_DIR, 'my-exp', { 'eval-1': 'new-hash' });
+      expect(result.size).toBe(0);
+    });
+
+    it('skips results marked as invalid', () => {
+      const expDir = join(TEST_DIR, 'my-exp', '2024-01-26T12-00-00.000Z', 'eval-1');
+      mkdirSync(expDir, { recursive: true });
+      writeFileSync(
+        join(expDir, 'summary.json'),
+        JSON.stringify({ totalRuns: 2, passedRuns: 0, passRate: '0%', meanDuration: 10, fingerprint: 'abc123', valid: false })
+      );
+
+      const result = scanReusableResults(TEST_DIR, 'my-exp', { 'eval-1': 'abc123' });
+      expect(result.size).toBe(0);
+    });
+
+    it('skips results with zero passed runs', () => {
+      const expDir = join(TEST_DIR, 'my-exp', '2024-01-26T12-00-00.000Z', 'eval-1');
+      mkdirSync(expDir, { recursive: true });
+      writeFileSync(
+        join(expDir, 'summary.json'),
+        JSON.stringify({ totalRuns: 2, passedRuns: 0, passRate: '0%', meanDuration: 10, fingerprint: 'abc123' })
+      );
+
+      const result = scanReusableResults(TEST_DIR, 'my-exp', { 'eval-1': 'abc123' });
+      expect(result.size).toBe(0);
+    });
+
+    it('returns empty map for non-existent experiment', () => {
+      const result = scanReusableResults(TEST_DIR, 'no-such-exp', { 'eval-1': 'abc123' });
+      expect(result.size).toBe(0);
+    });
+
+    it('prefers newest timestamp', () => {
+      // Create two timestamps with the same eval
+      for (const ts of ['2024-01-25T00-00-00.000Z', '2024-01-26T00-00-00.000Z']) {
+        const expDir = join(TEST_DIR, 'my-exp', ts, 'eval-1');
+        mkdirSync(expDir, { recursive: true });
+        writeFileSync(
+          join(expDir, 'summary.json'),
+          JSON.stringify({ totalRuns: 2, passedRuns: 1, passRate: '50%', meanDuration: 10, fingerprint: 'abc123' })
+        );
+      }
+
+      const result = scanReusableResults(TEST_DIR, 'my-exp', { 'eval-1': 'abc123' });
+      expect(result.size).toBe(1);
+      expect(result.get('eval-1')?.timestamp).toBe('2024-01-26T00-00-00.000Z');
     });
   });
 });
