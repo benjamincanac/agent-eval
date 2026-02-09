@@ -105,6 +105,9 @@ export class DockerSandboxManager implements Sandbox {
     // Start the container
     await this.container.start();
 
+    // Install CA certificates (slim images may not include them, causing HTTPS failures)
+    await this.runCommandAsRoot('bash', ['-c', 'apt-get update -qq && apt-get install -y -qq ca-certificates > /dev/null 2>&1']);
+
     // Create workspace directory owned by the non-root user (node:node in Node.js images)
     // The node user (UID 1000) already exists in node:*-slim images
     await this.runCommandAsRoot('mkdir', ['-p', CONTAINER_WORKDIR]);

@@ -88,8 +88,8 @@ export function housekeep(
         continue;
       }
 
-      // Check if this result is complete
-      if (isComplete(evalResultDir)) {
+      // Check if this result is complete (smoke results are always cleaned up)
+      if (isComplete(evalResultDir) && !isSmoke(evalResultDir)) {
         seenEvals.add(dedupeKey);
       } else {
         // Incomplete — remove
@@ -115,6 +115,18 @@ export function housekeep(
   }
 
   return stats;
+}
+
+/**
+ * Check if an eval result is from a smoke test.
+ */
+function isSmoke(evalResultDir: string): boolean {
+  try {
+    const summary = JSON.parse(readFileSync(join(evalResultDir, 'summary.json'), 'utf-8'));
+    return summary.smoke === true;
+  } catch {
+    return false;
+  }
 }
 
 /**

@@ -177,6 +177,7 @@ async function runExperimentCommand(configInput: string, options: { dry?: boolea
         apiKey,
         resultsDir,
         experimentName,
+        smoke: options.smoke,
         onProgress: (msg) => console.log(msg),
       });
 
@@ -426,6 +427,7 @@ async function runAllCommand(experimentArgs: string[], options: { dry?: boolean;
               resultsDir,
               experimentName,
               fingerprints,
+              smoke: options.smoke,
               onProgress: (msg) => console.log(`  ${msg}`),
             });
 

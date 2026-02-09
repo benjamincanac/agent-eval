@@ -25,6 +25,31 @@ import {
 type AnySandbox = SandboxManager | DockerSandboxManager;
 
 /**
+ * Parse model string with optional query parameters.
+ * e.g. "gpt-5.2-codex?reasoningEffort=high" → { model: "gpt-5.2-codex", reasoningEffort: "high" }
+ */
+function parseModelString(model: string): { model: string; reasoningEffort?: string } {
+  const qIndex = model.indexOf('?');
+  if (qIndex === -1) return { model };
+
+  const base = model.slice(0, qIndex);
+  const query = model.slice(qIndex + 1);
+  let reasoningEffort: string | undefined;
+
+  for (const pair of query.split('&')) {
+    const eqIndex = pair.indexOf('=');
+    if (eqIndex === -1) continue;
+    const key = pair.slice(0, eqIndex);
+    const value = decodeURIComponent(pair.slice(eqIndex + 1));
+    if (key === 'reasoningEffort') {
+      reasoningEffort = value;
+    }
+  }
+
+  return { model: base, reasoningEffort };
+}
+
+/**
  * Extract transcript from Codex JSON output.
  * When run with --json, Codex outputs JSONL to stdout with the full transcript.
  */
@@ -172,9 +197,13 @@ export function createCodexAgent({ useVercelAiGateway }: { useVercelAiGateway: b
       }
 
       // Install dependencies
-      const installResult = await sandbox.runCommand('npm', ['install']);
+      let installResult = await sandbox.runCommand('npm', ['install']);
       if (installResult.exitCode !== 0) {
-        throw new Error(`npm install failed: ${installResult.stderr}`);
+        installResult = await sandbox.runCommand('npm', ['install']);
+      }
+      if (installResult.exitCode !== 0) {
+        const output = (installResult.stdout + installResult.stderr).trim().split('\n').slice(-10).join('\n');
+        throw new Error(`npm install failed (exit code ${installResult.exitCode}):\n${output}`);
       }
 
       // Install Codex CLI globally
@@ -187,9 +216,12 @@ export function createCodexAgent({ useVercelAiGateway }: { useVercelAiGateway: b
         throw new Error(`Codex CLI install failed: ${cliInstall.stderr}`);
       }
 
+      // Parse model string for query parameters (e.g. "gpt-5.2-codex?reasoningEffort=high")
+      const { model: baseModel, reasoningEffort } = parseModelString(options.model);
+
       // Create Codex config directory and config file
       await sandbox.runShell('mkdir -p ~/.codex');
-      const configContent = generateCodexConfig(options.model, useVercelAiGateway);
+      const configContent = generateCodexConfig(baseModel, useVercelAiGateway);
       await sandbox.runShell(`cat > ~/.codex/config.toml << 'EOF'
 ${configContent}
 EOF`);
@@ -197,14 +229,14 @@ EOF`);
       // Verify no test files in sandbox
       await verifyNoTestFiles(sandbox);
 
-      // Run Codex CLI using exec mode for non-interactive execution
-      // Use --dangerously-bypass-approvals-and-sandbox since Vercel sandbox provides isolation
-      // Use --json for structured output and --skip-git-repo-check since sandbox is not a git repo
-      // Model is configured in config.toml, so we don't pass --model here
-      // First login with API key, then run exec
+      // Build Codex CLI command
+      // codex login sets up bearer auth for the CLI; env var provides the key for the model provider
       const envVarToSet = useVercelAiGateway ? AI_GATEWAY.apiKeyEnvVar : OPENAI_DIRECT.apiKeyEnvVar;
+      const escapedPrompt = options.prompt.replace(/'/g, "'\\''");
+      const reasoningFlag = reasoningEffort ? ` -c model_reasoning_effort="${reasoningEffort}"` : '';
       const codexResult = await sandbox.runShell(
-        `echo '${options.apiKey}' | codex login --with-api-key && export ${envVarToSet}='${options.apiKey}' && codex exec --dangerously-bypass-approvals-and-sandbox --json --skip-git-repo-check '${options.prompt.replace(/'/g, "'\\''")}'`
+        `echo '${options.apiKey}' | codex login --with-api-key && codex exec --model ${baseModel} --dangerously-bypass-approvals-and-sandbox --json --skip-git-repo-check${reasoningFlag} '${escapedPrompt}'`,
+        { [envVarToSet]: options.apiKey }
       );
 
       agentOutput = codexResult.stdout + codexResult.stderr;

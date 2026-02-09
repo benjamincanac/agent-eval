@@ -140,9 +140,13 @@ export function createClaudeCodeAgent({ useVercelAiGateway }: { useVercelAiGatew
       }
 
       // Install dependencies
-      const installResult = await sandbox.runCommand('npm', ['install']);
+      let installResult = await sandbox.runCommand('npm', ['install']);
       if (installResult.exitCode !== 0) {
-        throw new Error(`npm install failed: ${installResult.stderr}`);
+        installResult = await sandbox.runCommand('npm', ['install']);
+      }
+      if (installResult.exitCode !== 0) {
+        const output = (installResult.stdout + installResult.stderr).trim().split('\n').slice(-10).join('\n');
+        throw new Error(`npm install failed (exit code ${installResult.exitCode}):\n${output}`);
       }
 
       // Install Claude Code CLI globally

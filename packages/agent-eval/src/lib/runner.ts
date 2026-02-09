@@ -43,6 +43,8 @@ export interface RunExperimentOptions {
   onProgress?: (message: string) => void;
   /** Whether to run in verbose mode */
   verbose?: boolean;
+  /** Whether this is a smoke test run */
+  smoke?: boolean;
 }
 
 /**
@@ -70,7 +72,7 @@ interface AttemptResult {
 export async function runExperiment(
   options: RunExperimentOptions
 ): Promise<ExperimentResults> {
-  const { config, fixtures, apiKey, resultsDir, experimentName, fingerprints, onProgress, verbose } = options;
+  const { config, fixtures, apiKey, resultsDir, experimentName, fingerprints, onProgress, verbose, smoke } = options;
   const startedAt = new Date();
 
   // Get the agent from registry
@@ -239,6 +241,7 @@ export async function runExperiment(
     resultsDir,
     experimentName,
     fingerprints,
+    smoke,
   });
 
   log(`\nResults saved to: ${outputDir}`);

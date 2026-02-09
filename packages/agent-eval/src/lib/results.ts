@@ -97,6 +97,8 @@ export interface SaveResultsOptions {
   classifications?: Record<string, { failureType: string; failureReason: string }>;
   /** Per-eval validity flags (eval name -> valid). Defaults to true. */
   validity?: Record<string, boolean>;
+  /** Whether this is a smoke test run. Smoke results are excluded from reuse. */
+  smoke?: boolean;
 }
 
 /**
@@ -147,6 +149,9 @@ export function saveResults(
     }
     if (valid === false) {
       summaryForFile.valid = false;
+    }
+    if (options.smoke) {
+      summaryForFile.smoke = true;
     }
     writeFileSync(
       join(evalDir, 'summary.json'),
@@ -378,6 +383,9 @@ export function scanReusableResults(
 
         // Check validity (valid defaults to true if not explicitly set to false)
         if (summary.valid === false) continue;
+
+        // Skip smoke test results
+        if (summary.smoke === true) continue;
 
         // Check that it has completed runs (use --force to re-run failures)
         if (summary.totalRuns <= 0) continue;
