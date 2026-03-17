@@ -60,6 +60,20 @@ async function detectEvalFile(sandbox: AnySandbox): Promise<string> {
 }
 
 /**
+ * Read the scripts defined in the sandbox's package.json.
+ * Returns an empty set if package.json doesn't exist or is invalid.
+ */
+async function getAvailableScripts(sandbox: AnySandbox): Promise<Set<string>> {
+  try {
+    const content = await sandbox.readFile('package.json');
+    const pkg = JSON.parse(content);
+    return new Set(Object.keys(pkg.scripts ?? {}));
+  } catch {
+    return new Set();
+  }
+}
+
+/**
  * Run validation scripts in the sandbox.
  */
 export async function runValidation(
@@ -84,8 +98,13 @@ export async function runValidation(
     results.allPassed = false;
   }
 
-  // Run configured scripts
+  // Run configured scripts, skipping any not defined in package.json
+  const availableScripts = await getAvailableScripts(sandbox);
   for (const script of scripts) {
+    if (!availableScripts.has(script)) {
+      continue;
+    }
+
     const scriptResult = await sandbox.runCommand('npm', ['run', script]);
     const result: ScriptResult = {
       success: scriptResult.exitCode === 0,
