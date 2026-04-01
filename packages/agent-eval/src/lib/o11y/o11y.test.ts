@@ -10,6 +10,7 @@ import { parseCodexTranscript } from './parsers/codex.js';
 import { parseOpenCodeTranscript } from './parsers/opencode.js';
 import { parseGeminiTranscript } from './parsers/gemini.js';
 import { parseCursorTranscript } from './parsers/cursor.js';
+import { parseMistralVibeTranscript } from './parsers/mistral-vibe.js';
 
 describe('o11y', () => {
   describe('parseTranscript', () => {
@@ -38,6 +39,9 @@ describe('o11y', () => {
 
       const cursorResult = parseTranscript(claudeTranscript, 'cursor');
       expect(cursorResult.agent).toBe('cursor');
+
+      const vibeResult = parseTranscript(claudeTranscript, 'mistral-vibe');
+      expect(vibeResult.agent).toBe('mistral-vibe');
     });
 
     it('returns parseSuccess: false for unsupported agents', () => {
@@ -47,7 +51,7 @@ describe('o11y', () => {
 
       expect(result.parseSuccess).toBe(false);
       expect(result.parseErrors).toContain(
-        'No parser available for agent: unsupported-agent. Supported agents: claude-code, codex, opencode, gemini, cursor'
+        'No parser available for agent: unsupported-agent. Supported agents: claude-code, codex, opencode, gemini, cursor, mistral-vibe'
       );
       expect(result.events).toEqual([]);
       expect(result.summary.totalToolCalls).toBe(0);
@@ -734,6 +738,204 @@ describe('o11y', () => {
       expect(result.summary.toolCalls.file_read).toBe(1);
       expect(result.summary.totalToolCalls).toBe(1);
       expect(result.summary.filesRead).toContain('a.ts');
+    });
+  });
+
+  describe('Mistral Vibe parser', () => {
+    it('parses user_message events', () => {
+      const transcript = JSON.stringify({
+        type: 'user_message',
+        content: 'Fix the bug in main.ts',
+        message_id: 'msg_123',
+      });
+      const { events } = parseMistralVibeTranscript(transcript);
+
+      expect(events).toHaveLength(1);
+      expect(events[0].type).toBe('message');
+      expect(events[0].role).toBe('user');
+      expect(events[0].content).toBe('Fix the bug in main.ts');
+    });
+
+    it('parses assistant events', () => {
+      const transcript = JSON.stringify({
+        type: 'assistant',
+        content: 'I will fix the bug now.',
+        message_id: 'msg_456',
+      });
+      const { events } = parseMistralVibeTranscript(transcript);
+
+      expect(events).toHaveLength(1);
+      expect(events[0].type).toBe('message');
+      expect(events[0].role).toBe('assistant');
+      expect(events[0].content).toBe('I will fix the bug now.');
+    });
+
+    it('parses reasoning events as thinking', () => {
+      const transcript = JSON.stringify({
+        type: 'reasoning',
+        content: 'Let me analyze the code structure...',
+        message_id: 'msg_789',
+      });
+      const { events } = parseMistralVibeTranscript(transcript);
+
+      expect(events).toHaveLength(1);
+      expect(events[0].type).toBe('thinking');
+      expect(events[0].content).toBe('Let me analyze the code structure...');
+    });
+
+    it('parses tool_call events', () => {
+      const transcript = JSON.stringify({
+        type: 'tool_call',
+        tool_name: 'bash',
+        args: { command: 'npm test' },
+        tool_call_id: 'tc_001',
+      });
+      const { events } = parseMistralVibeTranscript(transcript);
+
+      expect(events).toHaveLength(1);
+      expect(events[0].type).toBe('tool_call');
+      expect(events[0].tool?.name).toBe('shell');
+      expect(events[0].tool?.originalName).toBe('bash');
+      expect(events[0].tool?.args?._extractedCommand).toBe('npm test');
+    });
+
+    it('parses tool_result events', () => {
+      const transcript = JSON.stringify({
+        type: 'tool_result',
+        tool_name: 'bash',
+        result: { output: 'All tests passed' },
+        error: null,
+        skipped: false,
+        duration: 2.5,
+        tool_call_id: 'tc_001',
+      });
+      const { events } = parseMistralVibeTranscript(transcript);
+
+      expect(events).toHaveLength(1);
+      expect(events[0].type).toBe('tool_result');
+      expect(events[0].tool?.name).toBe('shell');
+      expect(events[0].tool?.success).toBe(true);
+    });
+
+    it('parses failed tool_result events', () => {
+      const transcript = JSON.stringify({
+        type: 'tool_result',
+        tool_name: 'bash',
+        result: null,
+        error: 'Command not found',
+        tool_call_id: 'tc_002',
+      });
+      const { events } = parseMistralVibeTranscript(transcript);
+
+      expect(events).toHaveLength(1);
+      expect(events[0].tool?.success).toBe(false);
+    });
+
+    it('normalizes Vibe tool names', () => {
+      const tools = [
+        { name: 'read_file', expected: 'file_read' },
+        { name: 'write_file', expected: 'file_write' },
+        { name: 'search_replace', expected: 'file_edit' },
+        { name: 'bash', expected: 'shell' },
+        { name: 'grep', expected: 'grep' },
+        { name: 'task', expected: 'agent_task' },
+        { name: 'todo', expected: 'agent_task' },
+        { name: 'unknown_tool', expected: 'unknown' },
+      ];
+
+      for (const { name, expected } of tools) {
+        const transcript = JSON.stringify({
+          type: 'tool_call',
+          tool_name: name,
+          args: {},
+          tool_call_id: 'tc_test',
+        });
+        const { events } = parseMistralVibeTranscript(transcript);
+        expect(events[0].tool?.name).toBe(expected);
+      }
+    });
+
+    it('extracts file paths from tool args', () => {
+      const transcript = JSON.stringify({
+        type: 'tool_call',
+        tool_name: 'read_file',
+        args: { file_path: 'src/index.ts' },
+        tool_call_id: 'tc_003',
+      });
+      const { events } = parseMistralVibeTranscript(transcript);
+
+      expect(events[0].tool?.args?._extractedPath).toBe('src/index.ts');
+    });
+
+    it('extracts commands from shell tool args', () => {
+      const transcript = JSON.stringify({
+        type: 'tool_call',
+        tool_name: 'bash',
+        args: { command: 'npm install' },
+        tool_call_id: 'tc_004',
+      });
+      const { events } = parseMistralVibeTranscript(transcript);
+
+      expect(events[0].tool?.args?._extractedCommand).toBe('npm install');
+    });
+
+    it('skips tool_stream events', () => {
+      const transcript = JSON.stringify({
+        type: 'tool_stream',
+        tool_name: 'bash',
+        message: 'Installing packages...',
+        tool_call_id: 'tc_005',
+      });
+      const { events } = parseMistralVibeTranscript(transcript);
+
+      expect(events).toHaveLength(0);
+    });
+
+    it('handles a full streaming transcript end-to-end', () => {
+      const transcript = [
+        JSON.stringify({ type: 'user_message', content: 'Create a hello world app', message_id: 'msg_1' }),
+        JSON.stringify({ type: 'assistant', content: 'I will create the app.', message_id: 'msg_2' }),
+        JSON.stringify({ type: 'tool_call', tool_name: 'read_file', args: { file_path: 'package.json' }, tool_call_id: 'tc_1' }),
+        JSON.stringify({ type: 'tool_result', tool_name: 'read_file', result: '{}', error: null, tool_call_id: 'tc_1' }),
+        JSON.stringify({ type: 'tool_call', tool_name: 'bash', args: { command: 'mkdir src' }, tool_call_id: 'tc_2' }),
+        JSON.stringify({ type: 'tool_result', tool_name: 'bash', result: '', error: null, tool_call_id: 'tc_2' }),
+        JSON.stringify({ type: 'tool_call', tool_name: 'write_file', args: { file_path: 'src/index.ts', content: 'console.log("hello")' }, tool_call_id: 'tc_3' }),
+        JSON.stringify({ type: 'tool_result', tool_name: 'write_file', result: 'ok', error: null, tool_call_id: 'tc_3' }),
+        JSON.stringify({ type: 'assistant', content: 'Done! The app is ready.', message_id: 'msg_3' }),
+      ].join('\n');
+
+      const result = parseTranscript(transcript, 'mistral-vibe');
+
+      expect(result.parseSuccess).toBe(true);
+      expect(result.summary.totalTurns).toBe(2);
+      expect(result.summary.toolCalls.file_read).toBe(1);
+      expect(result.summary.toolCalls.shell).toBe(1);
+      expect(result.summary.toolCalls.file_write).toBe(1);
+      expect(result.summary.totalToolCalls).toBe(3);
+      expect(result.summary.filesRead).toContain('package.json');
+      expect(result.summary.filesModified).toContain('src/index.ts');
+      expect(result.summary.shellCommands).toHaveLength(1);
+      expect(result.summary.shellCommands[0].command).toBe('mkdir src');
+    });
+
+    it('handles LLMMessage-style events from --output json format', () => {
+      const transcript = JSON.stringify({
+        role: 'assistant',
+        content: 'Let me help.',
+        tool_calls: [
+          {
+            function: { name: 'read_file', arguments: '{"file_path":"src/app.ts"}' },
+            id: 'tc_json_1',
+          },
+        ],
+      });
+      const { events } = parseMistralVibeTranscript(transcript);
+
+      expect(events).toHaveLength(2);
+      expect(events[0].type).toBe('message');
+      expect(events[0].role).toBe('assistant');
+      expect(events[1].type).toBe('tool_call');
+      expect(events[1].tool?.name).toBe('file_read');
     });
   });
 
