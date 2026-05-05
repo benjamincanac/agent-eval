@@ -187,6 +187,7 @@ export async function runExperiment(
         apiKey,
         setup: config.setup,
         scripts: config.scripts,
+        validation: config.validation,
         signal: attemptController.signal,
         sandbox: config.sandbox,
         agentOptions: config.agentOptions,
@@ -225,7 +226,30 @@ export async function runExperiment(
       };
     }
 
-    const runData = agentResultToEvalRunData(agentResult);
+    let runData = agentResultToEvalRunData(agentResult);
+
+    if (config.onRunComplete) {
+      try {
+        const updatedRunData = await config.onRunComplete({
+          fixture,
+          runIndex,
+          config,
+          runData,
+        });
+        if (updatedRunData) {
+          runData = updatedRunData;
+        }
+      } catch (error) {
+        runData = {
+          ...runData,
+          result: {
+            ...runData.result,
+            status: 'failed',
+            error: `onRunComplete failed: ${error instanceof Error ? error.message : String(error)}`,
+          },
+        };
+      }
+    }
 
     return {
       fixtureName: fixture.name,
@@ -354,6 +378,7 @@ export async function runSingleEval<T extends ResolvedExperimentConfig['model']>
     apiKey: string;
     setup?: ResolvedExperimentConfig['setup'];
     scripts?: string[];
+    validation?: ResolvedExperimentConfig['validation'];
     sandbox?: ResolvedExperimentConfig['sandbox'];
     editPrompt?: (prompt: string) => string;
     verbose?: boolean;
@@ -376,6 +401,7 @@ export async function runSingleEval<T extends ResolvedExperimentConfig['model']>
 		apiKey: options.apiKey,
 		setup: options.setup,
 		scripts: options.scripts,
+		validation: options.validation,
 		sandbox: options.sandbox,
 		agentOptions: options.agentOptions,
 	});

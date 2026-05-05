@@ -4,8 +4,12 @@
 
 import { readFileSync, readdirSync, statSync, existsSync } from 'fs';
 import { join, resolve } from 'path';
-import type { EvalFixture } from './types.js';
+import type { EvalFixture, ValidationMode } from './types.js';
 import { REQUIRED_EVAL_FILES, EXCLUDED_FILES } from './types.js';
+
+export interface FixtureLoadOptions {
+  validation?: ValidationMode;
+}
 
 /**
  * Error thrown when an eval fixture is invalid.
@@ -85,12 +89,19 @@ export function discoverFixtures(evalsDir: string): string[] {
  * Note: Accepts either EVAL.ts or EVAL.tsx for the eval file.
  * Case-sensitive: 'prompt.md' will fail even on Mac/Windows.
  */
-export function validateFixtureFiles(fixturePath: string): string[] {
+export function validateFixtureFiles(
+  fixturePath: string,
+  options: FixtureLoadOptions = {}
+): string[] {
   const missing: string[] = [];
+  const validation = options.validation ?? 'vitest';
 
   for (const file of REQUIRED_EVAL_FILES) {
     // Special case: Accept either EVAL.ts or EVAL.tsx (both case-sensitive)
     if (file === 'EVAL.ts') {
+      if (validation === 'none') {
+        continue;
+      }
       const hasEvalTs = existsWithExactCase(fixturePath, 'EVAL.ts');
       const hasEvalTsx = existsWithExactCase(fixturePath, 'EVAL.tsx');
       if (!hasEvalTs && !hasEvalTsx) {
@@ -139,7 +150,11 @@ export function validatePackageJson(fixturePath: string): { isModule: boolean; e
 /**
  * Loads a single eval fixture with full validation.
  */
-export function loadFixture(evalsDir: string, name: string): EvalFixture {
+export function loadFixture(
+  evalsDir: string,
+  name: string,
+  options: FixtureLoadOptions = {}
+): EvalFixture {
   const fixturePath = resolve(evalsDir, name);
 
   if (!existsSync(fixturePath)) {
@@ -147,7 +162,7 @@ export function loadFixture(evalsDir: string, name: string): EvalFixture {
   }
 
   // Validate required files
-  const missingFiles = validateFixtureFiles(fixturePath);
+  const missingFiles = validateFixtureFiles(fixturePath, options);
   if (missingFiles.length > 0) {
     throw new FixtureValidationError(
       name,
@@ -180,7 +195,10 @@ export function loadFixture(evalsDir: string, name: string): EvalFixture {
  * Discovers and loads all valid eval fixtures from a directory.
  * Returns both valid fixtures and any validation errors encountered.
  */
-export function loadAllFixtures(evalsDir: string): {
+export function loadAllFixtures(
+  evalsDir: string,
+  options: FixtureLoadOptions = {}
+): {
   fixtures: EvalFixture[];
   errors: FixtureValidationError[];
 } {
@@ -190,7 +208,7 @@ export function loadAllFixtures(evalsDir: string): {
 
   for (const name of fixtureNames) {
     try {
-      const fixture = loadFixture(evalsDir, name);
+      const fixture = loadFixture(evalsDir, name, options);
       fixtures.push(fixture);
     } catch (error) {
       if (error instanceof FixtureValidationError) {

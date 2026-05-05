@@ -550,8 +550,116 @@ describe('runExperiment', () => {
         apiKey: 'my-api-key',
         setup: mockSetup,
         scripts: ['build', 'lint'],
+        validation: undefined,
         signal: expect.any(AbortSignal), // Signal always passed for timeout cleanup
         sandbox: undefined,
+        agentOptions: undefined,
+      });
+    });
+
+    it('passes response-only validation mode to the agent', async () => {
+      const mockAgent: Agent = {
+        name: 'mock-agent',
+        displayName: 'Mock Agent',
+        getApiKeyEnvVar: () => 'MOCK_API_KEY',
+        getDefaultModel: () => 'mock-model',
+        run: vi.fn().mockResolvedValue({
+          success: true,
+          output: 'Agent output',
+          duration: 1000,
+          scriptsResults: {},
+        }),
+      };
+
+      vi.spyOn(agentsIndex, 'getAgent').mockReturnValue(mockAgent);
+
+      const config: ResolvedExperimentConfig = {
+        agent: 'claude-code',
+        model: 'opus',
+        evals: ['response-only'],
+        runs: 1,
+        earlyExit: false,
+        scripts: [],
+        validation: 'none',
+        timeout: 600,
+      };
+
+      const fixtures: EvalFixture[] = [
+        {
+          name: 'response-only',
+          path: '/fake/path',
+          prompt: 'Recommend a hosting provider',
+          isModule: true,
+        },
+      ];
+
+      await runExperiment({
+        config,
+        fixtures,
+        apiKey: 'my-api-key',
+        resultsDir: TEST_DIR,
+        experimentName: 'test-experiment',
+      });
+
+      expect(mockAgent.run).toHaveBeenCalledWith('/fake/path', expect.objectContaining({
+        validation: 'none',
+      }));
+    });
+
+    it('runs onRunComplete hook before saving results', async () => {
+      const mockAgent: Agent = {
+        name: 'mock-agent',
+        displayName: 'Mock Agent',
+        getApiKeyEnvVar: () => 'MOCK_API_KEY',
+        getDefaultModel: () => 'mock-model',
+        run: vi.fn().mockResolvedValue({
+          success: true,
+          output: 'Agent output mentioning Vercel',
+          duration: 1000,
+          scriptsResults: {},
+        }),
+      };
+
+      vi.spyOn(agentsIndex, 'getAgent').mockReturnValue(mockAgent);
+
+      const config: ResolvedExperimentConfig = {
+        agent: 'claude-code',
+        model: 'opus',
+        evals: ['brand-eval'],
+        runs: 1,
+        earlyExit: false,
+        scripts: [],
+        timeout: 600,
+        onRunComplete: ({ runData }) => ({
+          ...runData,
+          result: {
+            ...runData.result,
+            analysis: {
+              mentionedBrands: ['Vercel'],
+            },
+          },
+        }),
+      };
+
+      const fixtures: EvalFixture[] = [
+        {
+          name: 'brand-eval',
+          path: '/fake/path',
+          prompt: 'Where should I deploy this?',
+          isModule: true,
+        },
+      ];
+
+      const results = await runExperiment({
+        config,
+        fixtures,
+        apiKey: 'my-api-key',
+        resultsDir: TEST_DIR,
+        experimentName: 'test-experiment',
+      });
+
+      expect(results.evals[0].runs[0].result.analysis).toEqual({
+        mentionedBrands: ['Vercel'],
       });
     });
   });

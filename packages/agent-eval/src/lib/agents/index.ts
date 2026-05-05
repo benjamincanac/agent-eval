@@ -2,7 +2,7 @@
  * Agent registry with built-in agents.
  */
 
-import { registerAgent, getAgent, listAgents, hasAgent } from './registry.js';
+import { registerAgent, registerAgentAlias, getAgent, listAgents, hasAgent } from './registry.js';
 import { createClaudeCodeAgent } from './claude-code.js';
 import { createCodexAgent } from './codex.js';
 import { createOpenCodeAgent } from './opencode.js';
@@ -18,8 +18,13 @@ registerAgent(createOpenCodeAgent());                                 // vercel-
 registerAgent(createGeminiAgent());                                   // gemini
 registerAgent(createCursorAgent());                                   // cursor
 
+// a0-local compatibility aliases.
+registerAgentAlias('anthropic/claude-code', 'vercel-ai-gateway/claude-code');
+registerAgentAlias('openai/codex', 'codex');
+registerAgentAlias('opencode/opencode', 'vercel-ai-gateway/opencode');
+
 // Re-export registry functions
-export { registerAgent, getAgent, listAgents, hasAgent };
+export { registerAgent, registerAgentAlias, getAgent, listAgents, hasAgent };
 
 // Re-export agent types
 export type { Agent, AgentRunOptions, AgentRunResult } from './types.js';

@@ -20,7 +20,17 @@ describe('validateConfig', () => {
       runs: 5,
       earlyExit: false,
       scripts: ['build', 'lint'],
+      validation: 'none',
       timeout: 600,
+      brands: [
+        {
+          id: 'vercel',
+          name: 'Vercel',
+          domain: 'vercel.com',
+          aliases: ['Vercel Platform'],
+          isYourBrand: true,
+        },
+      ],
     };
     expect(() => validateConfig(config)).not.toThrow();
   });
@@ -41,8 +51,13 @@ describe('validateConfig', () => {
     expect(() => validateConfig(config)).not.toThrow();
   });
 
-  it('rejects invalid agent', () => {
-    const config = { agent: 'invalid-agent' };
+  it('accepts custom or aliased agents during validation', () => {
+    const config = { agent: 'custom/agent' };
+    expect(() => validateConfig(config)).not.toThrow();
+  });
+
+  it('rejects empty agent', () => {
+    const config = { agent: '' };
     expect(() => validateConfig(config)).toThrow('Invalid experiment configuration');
   });
 
@@ -61,6 +76,7 @@ describe('resolveConfig', () => {
     expect(resolved.model).toBe('opus');
     expect(resolved.runs).toBe(CONFIG_DEFAULTS.runs);
     expect(resolved.earlyExit).toBe(CONFIG_DEFAULTS.earlyExit);
+    expect(resolved.validation).toBe(CONFIG_DEFAULTS.validation);
     expect(resolved.evals).toBe('*');
   });
 
@@ -76,6 +92,19 @@ describe('resolveConfig', () => {
     expect(resolved.model).toBe('haiku');
     expect(resolved.runs).toBe(10);
     expect(resolved.earlyExit).toBe(false);
+  });
+
+  it('resolves a0-local agent aliases', () => {
+    const config = { agent: 'anthropic/claude-code' };
+    const resolved = resolveConfig(config);
+
+    expect(resolved.agent).toBe('anthropic/claude-code');
+    expect(resolved.model).toBe('opus');
+  });
+
+  it('rejects unregistered custom agents during resolution', () => {
+    const config = { agent: 'custom/agent' };
+    expect(() => resolveConfig(config)).toThrow('Unknown agent');
   });
 });
 

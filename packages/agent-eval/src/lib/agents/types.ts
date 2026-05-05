@@ -2,7 +2,7 @@
  * Agent interface and common types for all agents.
  */
 
-import type { ModelTier, SetupFunction, SandboxBackend } from '../types.js';
+import type { ModelTier, SetupFunction, SandboxBackend, ValidationMode } from '../types.js';
 
 /**
  * Common options for all agents.
@@ -20,6 +20,8 @@ export interface AgentRunOptions {
   setup?: SetupFunction;
   /** npm scripts to run after agent completes */
   scripts?: string[];
+  /** Validation mode after agent completes */
+  validation?: ValidationMode;
   /** Abort signal to cancel the run */
   signal?: AbortSignal;
   /** Sandbox backend to use */

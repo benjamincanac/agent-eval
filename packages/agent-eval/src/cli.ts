@@ -83,7 +83,9 @@ async function runExperimentCommand(configInput: string, options: { dry?: boolea
     }
 
     console.log(chalk.blue(`Discovering evals in ${evalsDir}...`));
-    const { fixtures, errors } = loadAllFixtures(evalsDir);
+    const { fixtures, errors } = loadAllFixtures(evalsDir, {
+      validation: config.validation,
+    });
 
     if (errors.length > 0) {
       console.log(chalk.yellow(`\nWarning: ${errors.length} invalid fixture(s):`));
