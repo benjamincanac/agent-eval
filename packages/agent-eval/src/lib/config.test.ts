@@ -51,13 +51,8 @@ describe('validateConfig', () => {
     expect(() => validateConfig(config)).not.toThrow();
   });
 
-  it('accepts custom or aliased agents during validation', () => {
-    const config = { agent: 'custom/agent' };
-    expect(() => validateConfig(config)).not.toThrow();
-  });
-
-  it('rejects empty agent', () => {
-    const config = { agent: '' };
+  it('rejects invalid agent', () => {
+    const config = { agent: 'invalid-agent' };
     expect(() => validateConfig(config)).toThrow('Invalid experiment configuration');
   });
 
@@ -94,18 +89,6 @@ describe('resolveConfig', () => {
     expect(resolved.earlyExit).toBe(false);
   });
 
-  it('resolves a0-local agent aliases', () => {
-    const config = { agent: 'anthropic/claude-code' };
-    const resolved = resolveConfig(config);
-
-    expect(resolved.agent).toBe('anthropic/claude-code');
-    expect(resolved.model).toBe('opus');
-  });
-
-  it('rejects unregistered custom agents during resolution', () => {
-    const config = { agent: 'custom/agent' };
-    expect(() => resolveConfig(config)).toThrow('Unknown agent');
-  });
 });
 
 describe('resolveEvalNames', () => {

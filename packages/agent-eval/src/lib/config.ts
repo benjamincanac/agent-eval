@@ -30,7 +30,15 @@ export const CONFIG_DEFAULTS = {
  * Zod schema for validating experiment configuration.
  */
 const experimentConfigSchema = z.object({
-  agent: z.string().min(1),
+  agent: z.enum([
+    'vercel-ai-gateway/claude-code',
+    'claude-code',
+    'vercel-ai-gateway/codex',
+    'codex',
+    'vercel-ai-gateway/opencode',
+    'gemini',
+    'cursor',
+  ]),
   model: z.union([z.string(), z.array(z.string())]).optional(),
   evals: z
     .union([z.string(), z.array(z.string()), z.function().args(z.string()).returns(z.boolean())])

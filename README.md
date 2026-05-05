@@ -258,14 +258,6 @@ agent: 'gemini'       // requires GEMINI_API_KEY
 agent: 'cursor'       // requires CURSOR_API_KEY
 ```
 
-The runner also accepts these compatibility aliases:
-
-```typescript
-agent: 'anthropic/claude-code'  // alias for vercel-ai-gateway/claude-code
-agent: 'openai/codex'           // alias for codex
-agent: 'opencode/opencode'      // alias for vercel-ai-gateway/opencode
-```
-
 ### Multi-model experiments
 
 Provide an array of models to run the same experiment on each one. Results are stored under separate directories (`experiment-name/model-name`):
@@ -298,7 +290,7 @@ answer rather than changed files passing `EVAL.ts`.
 
 ```typescript
 const config: ExperimentConfig = {
-  agent: 'anthropic/claude-code',
+  agent: 'vercel-ai-gateway/claude-code',
   model: 'sonnet',
   validation: 'none',
   runs: 10,

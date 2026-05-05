@@ -6,7 +6,6 @@
 
 // Re-export types
 export type {
-  BuiltInAgentType,
   AgentType,
   ModelTier,
   EvalFilter,
@@ -85,7 +84,7 @@ export { TRANSCRIPT_CONTEXT_DIR, TRANSCRIPT_CONTEXT_PATH } from './lib/agents/sh
 
 // Re-export agent registry
 export type { Agent, ScriptResult } from './lib/agents/types.js';
-export { getAgent, listAgents, registerAgent, registerAgentAlias } from './lib/agents/index.js';
+export { getAgent, listAgents, registerAgent } from './lib/agents/index.js';
 
 // Re-export results utilities
 export type { SaveResultsOptions, ReusableResult } from './lib/results.js';
