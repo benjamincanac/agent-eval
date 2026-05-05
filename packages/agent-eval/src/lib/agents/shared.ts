@@ -6,6 +6,7 @@ import type { ScriptResult } from './types.js';
 import type { SandboxManager } from '../sandbox.js';
 import type { DockerSandboxManager } from '../docker-sandbox.js';
 import { parseTranscript } from '../o11y/index.js';
+import type { ValidationMode } from '../types.js';
 
 /** Union type for sandbox implementations */
 type AnySandbox = SandboxManager | DockerSandboxManager;
@@ -64,24 +65,27 @@ async function detectEvalFile(sandbox: AnySandbox): Promise<string> {
  */
 export async function runValidation(
   sandbox: AnySandbox,
-  scripts: string[]
+  scripts: string[],
+  validation: ValidationMode = 'vitest'
 ): Promise<ValidationResults> {
   const results: ValidationResults = {
     allPassed: true,
     scripts: {},
   };
 
-  // Detect which eval file exists (EVAL.ts or EVAL.tsx)
-  const evalFile = await detectEvalFile(sandbox);
+  if (validation === 'vitest') {
+    // Detect which eval file exists (EVAL.ts or EVAL.tsx)
+    const evalFile = await detectEvalFile(sandbox);
 
-  // Always run vitest for the eval file (explicitly specify the file)
-  const testResult = await sandbox.runCommand('npx', ['vitest', 'run', evalFile]);
-  results.test = {
-    success: testResult.exitCode === 0,
-    output: testResult.stdout + testResult.stderr,
-  };
-  if (!results.test.success) {
-    results.allPassed = false;
+    // Always run vitest for the eval file (explicitly specify the file)
+    const testResult = await sandbox.runCommand('npx', ['vitest', 'run', evalFile]);
+    results.test = {
+      success: testResult.exitCode === 0,
+      output: testResult.stdout + testResult.stderr,
+    };
+    if (!results.test.success) {
+      results.allPassed = false;
+    }
   }
 
   // Run configured scripts

@@ -75,6 +75,17 @@ describe('fixture discovery and validation', () => {
       expect(missing).not.toContain('PROMPT.md');
     });
 
+    it('does not require EVAL.ts for response-only fixtures', () => {
+      const path = createTestFixture('response-only', {
+        'PROMPT.md': '# Task',
+        'package.json': JSON.stringify({ type: 'module' }),
+      });
+
+      const missing = validateFixtureFiles(path, { validation: 'none' });
+      expect(missing).not.toContain('EVAL.ts or EVAL.tsx');
+      expect(missing).toEqual([]);
+    });
+
     it('enforces case-sensitive filenames', () => {
       const path = createTestFixture('wrong-case', {
         'prompt.md': '# Task', // Wrong case
@@ -125,6 +136,19 @@ describe('fixture discovery and validation', () => {
       expect(fixture.isModule).toBe(true);
     });
 
+    it('loads response-only fixture without eval file', () => {
+      createTestFixture('response-only', {
+        'PROMPT.md': 'Recommend a deployment platform',
+        'package.json': JSON.stringify({ name: 'response-only', type: 'module' }),
+      });
+
+      const fixture = loadFixture(TEST_DIR, 'response-only', { validation: 'none' });
+
+      expect(fixture.name).toBe('response-only');
+      expect(fixture.prompt).toBe('Recommend a deployment platform');
+      expect(fixture.isModule).toBe(true);
+    });
+
     it('throws for missing required files', () => {
       createTestFixture('incomplete', {
         'PROMPT.md': 'Task',
@@ -147,6 +171,23 @@ describe('fixture discovery and validation', () => {
       });
 
       const { fixtures, errors } = loadAllFixtures(TEST_DIR);
+
+      expect(fixtures).toHaveLength(1);
+      expect(fixtures[0].name).toBe('valid');
+      expect(errors).toHaveLength(1);
+      expect(errors[0].fixtureName).toBe('invalid');
+    });
+
+    it('loads response-only fixtures and collects errors using validation none', () => {
+      createTestFixture('valid', {
+        'PROMPT.md': 'Task',
+        'package.json': JSON.stringify({ type: 'module' }),
+      });
+      createTestFixture('invalid', {
+        'PROMPT.md': 'Task',
+      });
+
+      const { fixtures, errors } = loadAllFixtures(TEST_DIR, { validation: 'none' });
 
       expect(fixtures).toHaveLength(1);
       expect(fixtures[0].name).toBe('valid');

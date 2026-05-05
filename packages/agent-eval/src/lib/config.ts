@@ -20,6 +20,7 @@ export const CONFIG_DEFAULTS = {
   runs: 1,
   earlyExit: true,
   scripts: [] as string[],
+  validation: 'vitest' as const,
   timeout: 600, // 10 minutes
   sandbox: 'auto' as const,
   copyFiles: 'none' as const,
@@ -45,12 +46,22 @@ const experimentConfigSchema = z.object({
   runs: z.number().int().positive().optional(),
   earlyExit: z.boolean().optional(),
   scripts: z.array(z.string()).optional(),
+  validation: z.enum(['vitest', 'none']).optional(),
   timeout: z.number().positive().optional(),
   setup: z.function().optional(),
   sandbox: z.enum(['vercel', 'docker', 'auto']).optional(),
   editPrompt: z.function().args(z.string()).returns(z.string()).optional(),
   copyFiles: z.enum(['none', 'changed', 'all']).optional(),
   agentOptions: z.record(z.unknown()).optional(),
+  brands: z.array(z.object({
+    id: z.string().optional(),
+    name: z.string().min(1),
+    displayName: z.string().optional(),
+    domain: z.string().optional(),
+    aliases: z.array(z.string()).optional(),
+    isYourBrand: z.boolean().optional(),
+  })).optional(),
+  onRunComplete: z.function().optional(),
 });
 
 /**
@@ -87,12 +98,15 @@ export function resolveConfig(config: ExperimentConfig): ResolvedExperimentConfi
     runs: config.runs ?? CONFIG_DEFAULTS.runs,
     earlyExit: config.earlyExit ?? CONFIG_DEFAULTS.earlyExit,
     scripts: config.scripts ?? CONFIG_DEFAULTS.scripts,
+    validation: config.validation ?? CONFIG_DEFAULTS.validation,
     timeout: config.timeout ?? CONFIG_DEFAULTS.timeout,
     setup: config.setup,
     sandbox: config.sandbox ?? CONFIG_DEFAULTS.sandbox,
     editPrompt: config.editPrompt,
     copyFiles: config.copyFiles ?? CONFIG_DEFAULTS.copyFiles,
     agentOptions: config.agentOptions,
+    brands: config.brands,
+    onRunComplete: config.onRunComplete,
   };
 }
 

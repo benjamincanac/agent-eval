@@ -265,17 +265,19 @@ export function createOpenCodeAgent(): Agent {
           };
         }
 
-        // Upload test files for validation
-        await sandbox.uploadFiles(testFiles);
+        if (options.validation !== 'none') {
+          // Upload test files for validation
+          await sandbox.uploadFiles(testFiles);
 
-        // Create vitest config for EVAL.ts/tsx
-        await createVitestConfig(sandbox);
+          // Create vitest config for EVAL.ts/tsx
+          await createVitestConfig(sandbox);
 
-        // Inject transcript context so EVAL.ts tests can assert on agent behavior
-        await injectTranscriptContext(sandbox, transcript, 'vercel-ai-gateway/opencode', options.model);
+          // Inject transcript context so EVAL.ts tests can assert on agent behavior
+          await injectTranscriptContext(sandbox, transcript, 'vercel-ai-gateway/opencode', options.model);
+        }
 
         // Run validation scripts
-        const validationResults = await runValidation(sandbox, options.scripts ?? []);
+        const validationResults = await runValidation(sandbox, options.scripts ?? [], options.validation);
 
         // Capture generated files
         const { generatedFiles, deletedFiles } = await captureGeneratedFiles(sandbox);

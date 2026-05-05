@@ -25,6 +25,17 @@ export type ModelTier = string;
  */
 export type EvalFilter = (name: string) => boolean;
 
+export type ValidationMode = 'vitest' | 'none';
+
+export interface BrandConfig {
+  id?: string;
+  name: string;
+  displayName?: string;
+  domain?: string;
+  aliases?: string[];
+  isYourBrand?: boolean;
+}
+
 /**
  * Sandbox interface for setup functions.
  * Provides methods to interact with the isolated VM.
@@ -49,6 +60,17 @@ export interface Sandbox {
  * Receives a sandbox instance for pre-configuration.
  */
 export type SetupFunction = (sandbox: Sandbox) => Promise<void>;
+
+export interface RunCompleteContext {
+  fixture: EvalFixture;
+  runIndex: number;
+  config: RunnableExperimentConfig;
+  runData: EvalRunData;
+}
+
+export type RunCompleteHook = (
+  context: RunCompleteContext
+) => Promise<EvalRunData | void> | EvalRunData | void;
 
 /**
  * Sandbox backend type.
@@ -80,6 +102,9 @@ export interface ExperimentConfig {
   /** npm scripts that must pass after agent finishes. @default [] */
   scripts?: string[];
 
+  /** Validation mode after the agent finishes. @default 'vitest' */
+  validation?: ValidationMode;
+
   /** Maximum time in seconds for agent to complete. @default 300 (5 minutes) */
   timeout?: number;
 
@@ -102,6 +127,12 @@ export interface ExperimentConfig {
   /** Agent-specific options passed at runtime (e.g., binaryUrl, extraProviders for opencode).
    * These are forwarded to the agent's run() method. @default undefined */
   agentOptions?: Record<string, unknown>;
+
+  /** Brands to track or compare in downstream analysis. @default undefined */
+  brands?: BrandConfig[];
+
+  /** Optional hook for custom post-run analysis before results are saved. */
+  onRunComplete?: RunCompleteHook;
 }
 
 /**
@@ -114,12 +145,15 @@ export interface ResolvedExperimentConfig {
   runs: number;
   earlyExit: boolean;
   scripts: string[];
+  validation: ValidationMode;
   timeout: number;
   setup?: SetupFunction;
   sandbox: SandboxBackend | 'auto';
   editPrompt?: (prompt: string) => string;
   copyFiles: 'none' | 'changed' | 'all';
   agentOptions?: Record<string, unknown>;
+  brands?: BrandConfig[];
+  onRunComplete?: RunCompleteHook;
 }
 
 /**
@@ -132,12 +166,15 @@ export interface RunnableExperimentConfig {
   runs: number;
   earlyExit: boolean;
   scripts: string[];
+  validation: ValidationMode;
   timeout: number;
   setup?: SetupFunction;
   sandbox: SandboxBackend | 'auto';
   editPrompt?: (prompt: string) => string;
   copyFiles: 'none' | 'changed' | 'all';
   agentOptions?: Record<string, unknown>;
+  brands?: BrandConfig[];
+  onRunComplete?: RunCompleteHook;
 }
 
 /**
@@ -190,6 +227,10 @@ export interface EvalRunResult {
     /** Paths to npm script outputs (nested to avoid collision) */
     scripts?: Record<string, string>;
   };
+  /** Optional user-defined analysis data attached by post-run hooks */
+  analysis?: Record<string, unknown>;
+  /** Optional user-defined metadata attached by post-run hooks */
+  metadata?: Record<string, unknown>;
 }
 
 /**

@@ -188,6 +188,11 @@ const config: ExperimentConfig = {
   // npm scripts that must pass after agent finishes (default: [])
   scripts: ['build', 'lint'],
 
+  // Validation mode after the agent finishes (default: 'vitest')
+  // 'vitest' - run EVAL.ts/EVAL.tsx plus configured scripts
+  // 'none' - response-only mode; skip EVAL.ts/EVAL.tsx, run scripts if provided
+  validation: 'vitest',
+
   // Timeout per run in seconds (default: 600)
   timeout: 600,
 
@@ -204,6 +209,26 @@ const config: ExperimentConfig = {
 
   // Rewrite the prompt before running
   editPrompt: (prompt) => `Use the skill.\n\n${prompt}`,
+
+  // Custom post-run analysis hook. Can attach analysis/metadata to result.json.
+  onRunComplete: async ({ runData }) => ({
+    ...runData,
+    result: {
+      ...runData.result,
+      analysis: { mentionedBrands: ['Vercel'] },
+    },
+  }),
+
+  // Optional brands to compare in downstream analysis.
+  brands: [
+    {
+      id: 'vercel',
+      name: 'Vercel',
+      domain: 'vercel.com',
+      aliases: ['Vercel Platform'],
+      isYourBrand: true,
+    },
+  ],
 
   // Sandbox backend (default: 'auto' -- Vercel if token present, else Docker)
   sandbox: 'auto',
@@ -257,6 +282,33 @@ model: 'vercel/minimax/minimax-m2.1'
 ```
 
 The `vercel/` prefix is required. Using `anthropic/claude-sonnet-4` (without `vercel/`) will fail with a "provider not found" error.
+
+### Response-only evals
+
+Use `validation: 'none'` for tasks where the important output is the agent's
+answer rather than changed files passing `EVAL.ts`.
+
+```typescript
+const config: ExperimentConfig = {
+  agent: 'vercel-ai-gateway/claude-code',
+  model: 'sonnet',
+  validation: 'none',
+  runs: 10,
+  earlyExit: false,
+  brands: [
+    { id: 'vercel', name: 'Vercel', aliases: ['Vercel Platform'], isYourBrand: true },
+    { id: 'netlify', name: 'Netlify' },
+    { id: 'railway', name: 'Railway' },
+  ],
+  onRunComplete: async ({ runData }) => {
+    // Add custom brand/recommendation analysis here.
+    return runData;
+  },
+};
+```
+
+Response-only fixtures still need `PROMPT.md` and `package.json`, but they do
+not need `EVAL.ts` or `EVAL.tsx`.
 
 ## A/B Testing
 

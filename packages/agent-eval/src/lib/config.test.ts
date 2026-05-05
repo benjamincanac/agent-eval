@@ -20,7 +20,17 @@ describe('validateConfig', () => {
       runs: 5,
       earlyExit: false,
       scripts: ['build', 'lint'],
+      validation: 'none',
       timeout: 600,
+      brands: [
+        {
+          id: 'vercel',
+          name: 'Vercel',
+          domain: 'vercel.com',
+          aliases: ['Vercel Platform'],
+          isYourBrand: true,
+        },
+      ],
     };
     expect(() => validateConfig(config)).not.toThrow();
   });
@@ -61,6 +71,7 @@ describe('resolveConfig', () => {
     expect(resolved.model).toBe('opus');
     expect(resolved.runs).toBe(CONFIG_DEFAULTS.runs);
     expect(resolved.earlyExit).toBe(CONFIG_DEFAULTS.earlyExit);
+    expect(resolved.validation).toBe(CONFIG_DEFAULTS.validation);
     expect(resolved.evals).toBe('*');
   });
 
@@ -77,6 +88,7 @@ describe('resolveConfig', () => {
     expect(resolved.runs).toBe(10);
     expect(resolved.earlyExit).toBe(false);
   });
+
 });
 
 describe('resolveEvalNames', () => {

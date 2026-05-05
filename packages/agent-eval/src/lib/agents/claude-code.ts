@@ -233,20 +233,22 @@ export function createClaudeCodeAgent({ useVercelAiGateway }: { useVercelAiGatew
         };
       }
 
-      // Upload test files for validation
-      await sandbox.uploadFiles(testFiles);
-
-      // Create vitest config for EVAL.ts/tsx
-      await createVitestConfig(sandbox);
-
       // Capture transcript before validation when available
       await captureTranscriptBestEffort();
 
-      // Inject transcript context so EVAL.ts tests can assert on agent behavior
-      await injectTranscriptContext(sandbox, transcript, 'claude-code', options.model);
+      if (options.validation !== 'none') {
+        // Upload test files for validation
+        await sandbox.uploadFiles(testFiles);
+
+        // Create vitest config for EVAL.ts/tsx
+        await createVitestConfig(sandbox);
+
+        // Inject transcript context so EVAL.ts tests can assert on agent behavior
+        await injectTranscriptContext(sandbox, transcript, 'claude-code', options.model);
+      }
 
       // Run validation scripts
-      const validationResults = await runValidation(sandbox, options.scripts ?? []);
+      const validationResults = await runValidation(sandbox, options.scripts ?? [], options.validation);
 
       // Capture generated files
       const { generatedFiles, deletedFiles } = await captureGeneratedFiles(sandbox);

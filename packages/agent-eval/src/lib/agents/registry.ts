@@ -21,7 +21,7 @@ export function registerAgent(agent: Agent): void {
 export function getAgent(name: AgentType): Agent {
   const agent = agents.get(name);
   if (!agent) {
-    const available = Array.from(agents.keys()).join(', ');
+    const available = listAgents().join(', ');
     throw new Error(`Unknown agent: ${name}. Available agents: ${available}`);
   }
   return agent;
