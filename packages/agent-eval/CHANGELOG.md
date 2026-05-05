@@ -1,5 +1,11 @@
 # @vercel/agent-eval
 
+## 0.14.0
+
+### Minor Changes
+
+- [#123](https://github.com/vercel-labs/agent-eval/pull/123) [`07614ec`](https://github.com/vercel-labs/agent-eval/commit/07614ec3b769581abd4cd1845a5ff62f3a2c1b11) Thanks [@allenzhou101](https://github.com/allenzhou101)! - Add response-only eval support, post-run analysis hooks, and brand definitions.
+
 ## 0.13.1
 
 ### Patch Changes
