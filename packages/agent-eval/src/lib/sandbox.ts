@@ -6,7 +6,7 @@
 import { Sandbox as VercelSandbox, type Command } from '@vercel/sandbox';
 import type { Sandbox } from './types.js';
 import { readFileSync } from 'fs';
-import { join } from 'path';
+import { isAbsolute, join } from 'path';
 import { DockerSandboxManager } from './docker-sandbox.js';
 
 /**
@@ -174,13 +174,14 @@ export class SandboxManager implements Sandbox {
   async runCommand(
     command: string,
     args: string[] = [],
-    options: { env?: Record<string, string> } = {}
+    options: { env?: Record<string, string>; cwd?: string } = {}
   ): Promise<CommandResult> {
     return waitForDetachedCommand(
       await this.sandbox.runCommand({
         cmd: command,
         args,
         env: options.env,
+        cwd: options.cwd ?? this._workingDirectory,
         detached: true,
       })
     );
@@ -189,12 +190,13 @@ export class SandboxManager implements Sandbox {
   /**
    * Run a shell command (through bash).
    */
-  async runShell(command: string, env?: Record<string, string>): Promise<CommandResult> {
+  async runShell(command: string, env?: Record<string, string>, cwd?: string): Promise<CommandResult> {
     return waitForDetachedCommand(
       await this.sandbox.runCommand({
         cmd: 'bash',
         args: ['-c', command],
         env,
+        cwd: cwd ?? this._workingDirectory,
         detached: true,
       })
     );
@@ -227,7 +229,7 @@ export class SandboxManager implements Sandbox {
 
     for (const [path, content] of Object.entries(files)) {
       sandboxFiles.push({
-        path,
+        path: this.resolveSandboxPath(path),
         content: Buffer.from(content, 'utf-8'),
       });
     }
@@ -240,7 +242,7 @@ export class SandboxManager implements Sandbox {
    */
   async uploadFiles(files: SandboxFile[]): Promise<void> {
     const sandboxFiles = files.map((f) => ({
-      path: f.path,
+      path: this.resolveSandboxPath(f.path),
       content: typeof f.content === 'string' ? Buffer.from(f.content, 'utf-8') : f.content,
     }));
 
@@ -252,6 +254,17 @@ export class SandboxManager implements Sandbox {
    */
   getWorkingDirectory(): string {
     return this._workingDirectory;
+  }
+
+  /**
+   * Set the working directory.
+   */
+  setWorkingDirectory(path: string): void {
+    this._workingDirectory = path;
+  }
+
+  private resolveSandboxPath(path: string): string {
+    return isAbsolute(path) ? path : join(this._workingDirectory, path);
   }
 
   /**

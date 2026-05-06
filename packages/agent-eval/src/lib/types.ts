@@ -45,7 +45,7 @@ export interface Sandbox {
   runCommand(
     command: string,
     args?: string[],
-    options?: { env?: Record<string, string> }
+    options?: { env?: Record<string, string>; cwd?: string }
   ): Promise<{ stdout: string; stderr: string; exitCode: number }>;
   /** Read a file from the sandbox */
   readFile(path: string): Promise<string>;
@@ -53,6 +53,8 @@ export interface Sandbox {
   writeFiles(files: Record<string, string>): Promise<void>;
   /** Get the sandbox working directory */
   getWorkingDirectory(): string;
+  /** Set the sandbox working directory for subsequent commands */
+  setWorkingDirectory(path: string): void;
 }
 
 /**

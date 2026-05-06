@@ -61,6 +61,7 @@ export class DockerSandboxManager implements Sandbox {
   private _containerId: string = '';
   private timeout: number;
   private runtime: string;
+  private _workingDirectory: string = CONTAINER_WORKDIR;
 
   constructor(options: DockerSandboxOptions = {}) {
     this.docker = new Docker();
@@ -179,7 +180,7 @@ export class DockerSandboxManager implements Sandbox {
   async runCommand(
     command: string,
     args: string[] = [],
-    options: { env?: Record<string, string> } = {}
+    options: { env?: Record<string, string>; cwd?: string } = {}
   ): Promise<CommandResult> {
     // Ensure npm global binaries are in PATH
     const env = {
@@ -189,6 +190,7 @@ export class DockerSandboxManager implements Sandbox {
 
     return this.execCommand(command, args, {
       env,
+      cwd: options.cwd,
       user: `${SANDBOX_UID}:${SANDBOX_GID}`,
     });
   }
@@ -200,7 +202,7 @@ export class DockerSandboxManager implements Sandbox {
   private async runCommandAsRoot(
     command: string,
     args: string[] = [],
-    options: { env?: Record<string, string> } = {}
+    options: { env?: Record<string, string>; cwd?: string } = {}
   ): Promise<CommandResult> {
     return this.execCommand(command, args, {
       ...options,
@@ -214,7 +216,7 @@ export class DockerSandboxManager implements Sandbox {
   private async execCommand(
     command: string,
     args: string[] = [],
-    options: { env?: Record<string, string>; user?: string } = {}
+    options: { env?: Record<string, string>; cwd?: string; user?: string } = {}
   ): Promise<CommandResult> {
     if (!this.container) {
       throw new Error('Container not initialized');
@@ -229,7 +231,7 @@ export class DockerSandboxManager implements Sandbox {
       Cmd: cmd,
       AttachStdout: true,
       AttachStderr: true,
-      WorkingDir: CONTAINER_WORKDIR,
+      WorkingDir: options.cwd ?? this._workingDirectory,
       Env: env,
       User: options.user,
     });
@@ -311,8 +313,8 @@ export class DockerSandboxManager implements Sandbox {
   /**
    * Run a shell command (through bash).
    */
-  async runShell(command: string, env?: Record<string, string>): Promise<CommandResult> {
-    return this.runCommand('bash', ['-c', command], { env });
+  async runShell(command: string, env?: Record<string, string>, cwd?: string): Promise<CommandResult> {
+    return this.runCommand('bash', ['-c', command], { env, cwd });
   }
 
   /**
@@ -383,7 +385,14 @@ export class DockerSandboxManager implements Sandbox {
    * Get the working directory.
    */
   getWorkingDirectory(): string {
-    return CONTAINER_WORKDIR;
+    return this._workingDirectory;
+  }
+
+  /**
+   * Set the working directory.
+   */
+  setWorkingDirectory(path: string): void {
+    this._workingDirectory = path;
   }
 
   /**
