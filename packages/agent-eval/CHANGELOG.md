@@ -1,5 +1,11 @@
 # @vercel/agent-eval
 
+## 0.14.1
+
+### Patch Changes
+
+- [#126](https://github.com/vercel-labs/agent-eval/pull/126) [`ea8d7ab`](https://github.com/vercel-labs/agent-eval/commit/ea8d7abba64165bd2b7e08e64450517cd31e3b67) Thanks [@allenzhou101](https://github.com/allenzhou101)! - Run agent tasks from a neutral workspace to avoid sandbox provider path leakage.
+
 ## 0.14.0
 
 ### Minor Changes
