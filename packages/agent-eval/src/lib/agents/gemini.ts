@@ -20,6 +20,7 @@ import {
   GEMINI_DIRECT,
   initGitAndCommit,
   injectTranscriptContext,
+  prepareNeutralWorkspace,
 } from './shared.js';
 
 /** Union type for sandbox implementations */
@@ -135,6 +136,7 @@ export function createGeminiAgent(): Agent {
         if (options.setup) {
           await options.setup(sandbox);
         }
+        const neutralWorkspace = await prepareNeutralWorkspace(sandbox);
 
         // Install dependencies
         let installResult = await sandbox.runCommand('npm', ['install']);
@@ -176,6 +178,7 @@ export function createGeminiAgent(): Agent {
           {
             env: {
               [GEMINI_DIRECT.apiKeyEnvVar]: options.apiKey,
+              ...neutralWorkspace.env,
             },
           }
         );

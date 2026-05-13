@@ -20,6 +20,7 @@ import {
   CURSOR_DIRECT,
   initGitAndCommit,
   injectTranscriptContext,
+  prepareNeutralWorkspace,
 } from './shared.js';
 
 /** Union type for sandbox implementations */
@@ -135,6 +136,7 @@ export function createCursorAgent(): Agent {
         if (options.setup) {
           await options.setup(sandbox);
         }
+        const neutralWorkspace = await prepareNeutralWorkspace(sandbox);
 
         // Install dependencies
         let installResult = await sandbox.runCommand('npm', ['install']);
@@ -175,6 +177,7 @@ export function createCursorAgent(): Agent {
           {
             env: {
               [CURSOR_DIRECT.apiKeyEnvVar]: options.apiKey,
+              ...neutralWorkspace.env,
             },
           }
         );

@@ -21,6 +21,7 @@ import {
   OPENAI_DIRECT,
   initGitAndCommit,
   injectTranscriptContext,
+  prepareNeutralWorkspace,
 } from './shared.js';
 
 /** Union type for sandbox implementations */
@@ -194,6 +195,7 @@ export function createCodexAgent({ useVercelAiGateway }: { useVercelAiGateway: b
       if (options.setup) {
         await options.setup(sandbox);
       }
+      const neutralWorkspace = await prepareNeutralWorkspace(sandbox);
 
       // Install dependencies
       let installResult = await sandbox.runCommand('npm', ['install']);
@@ -237,7 +239,7 @@ EOF`);
       // codex login sets up bearer auth for the CLI; the built-in openai provider requires it
       const codexResult = await sandbox.runShell(
         `echo '${options.apiKey}' | codex login --with-api-key && codex exec --model ${cliModel} --dangerously-bypass-approvals-and-sandbox --json --skip-git-repo-check${reasoningFlag} '${escapedPrompt}'`,
-        { [envVarToSet]: options.apiKey }
+        { [envVarToSet]: options.apiKey, ...neutralWorkspace.env }
       );
 
       agentOutput = codexResult.stdout + codexResult.stderr;

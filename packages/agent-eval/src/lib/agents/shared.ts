@@ -30,6 +30,11 @@ export interface ValidationResults {
   scripts: Record<string, ScriptResult>;
 }
 
+export interface NeutralWorkspace {
+  cwd: string;
+  env: Record<string, string>;
+}
+
 /**
  * Detect which eval file exists in the sandbox (EVAL.ts or EVAL.tsx).
  * Case-sensitive: Only matches exact uppercase filenames.
@@ -104,6 +109,34 @@ export async function runValidation(
   }
 
   return results;
+}
+
+export async function prepareNeutralWorkspace(sandbox: AnySandbox): Promise<NeutralWorkspace> {
+  const neutralEnv = { USER: 'user', LOGNAME: 'user' };
+  const currentWorkingDirectory = sandbox.getWorkingDirectory();
+
+  await sandbox.runShell('git remote remove origin 2>/dev/null || true; rm -rf .git/logs');
+
+  if (!currentWorkingDirectory.includes('/vercel/')) {
+    return { cwd: currentWorkingDirectory, env: neutralEnv };
+  }
+
+  const neutralWorkspacePath = '/workspace';
+  const copyResult = await sandbox.runShell(
+    [
+      `sudo rm -rf ${neutralWorkspacePath}`,
+      `sudo mkdir -p ${neutralWorkspacePath}`,
+      `sudo cp -a . ${neutralWorkspacePath}/`,
+      `sudo chown -R "$(id -u):$(id -g)" ${neutralWorkspacePath}`,
+    ].join(' && ')
+  );
+  if (copyResult.exitCode !== 0) {
+    const output = (copyResult.stdout + copyResult.stderr).trim().split('\n').slice(-10).join('\n');
+    throw new Error(`Failed to prepare neutral workspace:\n${output}`);
+  }
+
+  sandbox.setWorkingDirectory(neutralWorkspacePath);
+  return { cwd: neutralWorkspacePath, env: neutralEnv };
 }
 
 export async function initGitAndCommit(sandbox: AnySandbox): Promise<void> {
