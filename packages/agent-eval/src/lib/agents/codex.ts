@@ -76,32 +76,26 @@ function extractTranscriptFromOutput(output: string): string | undefined {
 }
 
 /**
- * Generate Codex config.toml content.
+ * Generate Codex profile config content.
  */
-function generateCodexConfig(model: string, useVercelAiGateway: boolean): string {
+export function generateCodexConfig(model: string, useVercelAiGateway: boolean): string {
   if (useVercelAiGateway) {
     // AI Gateway uses prefixed model names like "openai/gpt-5.2-codex"
     const fullModel = model.includes('/') ? model : `openai/${model}`;
     return `# Codex configuration for Vercel AI Gateway
-profile = "default"
+model_provider = "vercel"
+model = "${fullModel}"
 
 [model_providers.vercel]
 name = "Vercel AI Gateway"
 base_url = "${AI_GATEWAY.openAiBaseUrl}"
 env_key = "${AI_GATEWAY.apiKeyEnvVar}"
 wire_api = "responses"
-
-[profiles.default]
-model_provider = "vercel"
-model = "${fullModel}"
 `;
   } else {
     // Direct OpenAI API — use the built-in "openai" provider (no custom provider needed)
     const directModel = model.includes('/') ? model.split('/').pop()! : model;
     return `# Direct OpenAI API configuration
-profile = "default"
-
-[profiles.default]
 model_provider = "openai"
 model = "${directModel}"
 `;
@@ -220,10 +214,12 @@ export function createCodexAgent({ useVercelAiGateway }: { useVercelAiGateway: b
       // Parse model string for query parameters (e.g. "gpt-5.2-codex?reasoningEffort=high")
       const { model: baseModel, reasoningEffort } = parseModelString(options.model);
 
-      // Create Codex config directory and config file
+      // Create Codex profile config. Recent Codex CLI versions reject the old
+      // top-level `profile = "default"` key in config.toml and instead load
+      // `$CODEX_HOME/<profile>.config.toml` when `--profile <profile>` is set.
       await sandbox.runShell('mkdir -p ~/.codex');
       const configContent = generateCodexConfig(baseModel, useVercelAiGateway);
-      await sandbox.runShell(`cat >> ~/.codex/config.toml << 'EOF'
+      await sandbox.runShell(`cat > ~/.codex/default.config.toml << 'EOF'
 ${configContent}
 EOF`);
 
@@ -238,7 +234,7 @@ EOF`);
       const cliModel = useVercelAiGateway ? baseModel : (baseModel.includes('/') ? baseModel.split('/').pop()! : baseModel);
       // codex login sets up bearer auth for the CLI; the built-in openai provider requires it
       const codexResult = await sandbox.runShell(
-        `echo '${options.apiKey}' | codex login --with-api-key && codex exec --model ${cliModel} --dangerously-bypass-approvals-and-sandbox --json --skip-git-repo-check${reasoningFlag} '${escapedPrompt}'`,
+        `echo '${options.apiKey}' | codex login --with-api-key && codex exec --profile default --model ${cliModel} --dangerously-bypass-approvals-and-sandbox --json --skip-git-repo-check${reasoningFlag} '${escapedPrompt}'`,
         { [envVarToSet]: options.apiKey, ...neutralWorkspace.env }
       );
 
