@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { createClaudeCodeAgent } from './claude-code.js';
+import { buildClaudeCodeCliArgs, createClaudeCodeAgent } from './claude-code.js';
 
 describe('createClaudeCodeAgent', () => {
   const originalEnv = process.env;
@@ -34,6 +34,29 @@ describe('createClaudeCodeAgent', () => {
       process.env.CLAUDE_CODE_OAUTH_TOKEN = 'test-oauth-token';
       const agent = createClaudeCodeAgent({ useVercelAiGateway: true });
       expect(agent.getApiKeyEnvVar()).toBe('AI_GATEWAY_API_KEY');
+    });
+  });
+
+  describe('buildClaudeCodeCliArgs', () => {
+    it('allows web search and fetch tools for source collection', () => {
+      const args = buildClaudeCodeCliArgs({
+        model: 'opus',
+        prompt: 'where should this run?',
+        timeout: 60_000,
+        apiKey: 'test-key',
+        validation: 'none',
+      });
+
+      expect(args).toEqual([
+        '--print',
+        '--model',
+        'opus',
+        '--dangerously-skip-permissions',
+        '--allowedTools',
+        'WebSearch',
+        'WebFetch',
+        'where should this run?',
+      ]);
     });
   });
 });

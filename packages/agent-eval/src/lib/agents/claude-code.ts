@@ -27,6 +27,22 @@ import {
 /** Union type for sandbox implementations */
 type AnySandbox = SandboxManager | DockerSandboxManager;
 
+export function buildClaudeCodeCliArgs(options: AgentRunOptions): string[] {
+  const cliArgs = [
+    '--print',
+    '--model',
+    options.model,
+    '--dangerously-skip-permissions',
+    '--allowedTools',
+    'WebSearch',
+    'WebFetch',
+  ];
+  const effort = options.agentOptions?.effort as string | undefined;
+  if (effort) cliArgs.push('--effort', effort);
+  cliArgs.push(options.prompt);
+  return cliArgs;
+}
+
 /**
  * Capture the Claude Code transcript from the sandbox.
  * Claude Code stores transcripts at ~/.claude/projects/-{workdir}/{session-id}.jsonl
@@ -201,13 +217,9 @@ export function createClaudeCodeAgent({ useVercelAiGateway }: { useVercelAiGatew
         };
       }
 
-      // Build CLI arguments
-      const cliArgs = ['--print', '--model', options.model, '--dangerously-skip-permissions'];
-      const effort = options.agentOptions?.effort as string | undefined;
-      if (effort) {
-        cliArgs.push('--effort', effort);
-      }
-      cliArgs.push(options.prompt);
+      // Build CLI arguments. Recommendation evals need source visibility, so
+      // allow Claude Code's native web search/fetch tools explicitly.
+      const cliArgs = buildClaudeCodeCliArgs(options);
 
       // Run Claude Code with appropriate authentication
       const claudeResult = await sandbox.runCommand(
