@@ -1,5 +1,11 @@
 # @vercel/agent-eval
 
+## 0.14.2
+
+### Patch Changes
+
+- [#138](https://github.com/vercel-labs/agent-eval/pull/138) [`5950d74`](https://github.com/vercel-labs/agent-eval/commit/5950d74405dbbb4c15658b20ad73281cbd965325) Thanks [@molebox](https://github.com/molebox)! - Update the Codex adapter for the current Codex CLI profile-file config format.
+
 ## 0.14.1
 
 ### Patch Changes
