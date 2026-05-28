@@ -9,4 +9,3 @@ out/
 coverage/
 .vercel
 .env*.local
-vercel-agent-eval-*.tgz
