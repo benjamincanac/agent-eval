@@ -75,6 +75,19 @@ function extractTranscriptFromOutput(output: string): string | undefined {
   return lines.join('\n');
 }
 
+export function buildCodexExecCommand(input: {
+  apiKey: string;
+  cliModel: string;
+  prompt: string;
+  reasoningEffort?: string;
+}): string {
+  const escapedPrompt = input.prompt.replace(/'/g, "'\\''");
+  const effectiveReasoningEffort = input.reasoningEffort ?? DEFAULT_REASONING_EFFORT;
+  const reasoningFlag = ` -c model_reasoning_effort="${effectiveReasoningEffort}"`;
+  const verbosityFlag = ` -c model_verbosity="${DEFAULT_MODEL_VERBOSITY}"`;
+  return `echo '${input.apiKey}' | codex login --with-api-key && codex exec --search --profile default --model ${input.cliModel} --dangerously-bypass-approvals-and-sandbox --json --skip-git-repo-check${reasoningFlag}${verbosityFlag} '${escapedPrompt}'`;
+}
+
 /**
  * Default reasoning effort and verbosity baked into the generated Codex
  * profile.
@@ -264,19 +277,15 @@ EOF`);
 
       // Build Codex CLI command
       const envVarToSet = useVercelAiGateway ? AI_GATEWAY.apiKeyEnvVar : OPENAI_DIRECT.apiKeyEnvVar;
-      const escapedPrompt = options.prompt.replace(/'/g, "'\\''");
       // Direct OpenAI API needs unprefixed model names (e.g. "gpt-5.2-codex" not "openai/gpt-5.2-codex")
       const cliModel = useVercelAiGateway ? baseModel : (baseModel.includes('/') ? baseModel.split('/').pop()! : baseModel);
       // Pass reasoning effort and verbosity via -c too; CLI flags have the
       // highest precedence and we've observed Codex CLI silently falling back
       // to its "low" defaults for both fields even when the profile sets them.
       // Both default to "medium" for compatibility with gpt-5.2-codex.
-      const effectiveReasoningEffort = reasoningEffort ?? DEFAULT_REASONING_EFFORT;
-      const reasoningFlag = ` -c model_reasoning_effort="${effectiveReasoningEffort}"`;
-      const verbosityFlag = ` -c model_verbosity="${DEFAULT_MODEL_VERBOSITY}"`;
       // codex login sets up bearer auth for the CLI; the built-in openai provider requires it
       const codexResult = await sandbox.runShell(
-        `echo '${options.apiKey}' | codex login --with-api-key && codex exec --profile default --model ${cliModel} --dangerously-bypass-approvals-and-sandbox --json --skip-git-repo-check${reasoningFlag}${verbosityFlag} '${escapedPrompt}'`,
+        buildCodexExecCommand({ apiKey: options.apiKey, cliModel, prompt: options.prompt, reasoningEffort }),
         { [envVarToSet]: options.apiKey, ...neutralWorkspace.env }
       );
 
