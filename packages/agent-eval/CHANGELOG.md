@@ -1,5 +1,11 @@
 # @vercel/agent-eval
 
+## 0.14.4
+
+### Patch Changes
+
+- [#141](https://github.com/vercel-labs/agent-eval/pull/141) [`2d27942`](https://github.com/vercel-labs/agent-eval/commit/2d27942cc3a21d840e2a8deb7fd8ccc376dea319) Thanks [@molebox](https://github.com/molebox)! - Enable source-capable web tools for recommendation eval agent runs.
+
 ## 0.14.3
 
 ### Patch Changes
