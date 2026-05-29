@@ -82,20 +82,53 @@ export function buildCodexExecCommand(input: {
   reasoningEffort?: string;
 }): string {
   const escapedPrompt = input.prompt.replace(/'/g, "'\\''");
-  const reasoningFlag = input.reasoningEffort ? ` -c model_reasoning_effort="${input.reasoningEffort}"` : '';
-  return `echo '${input.apiKey}' | codex login --with-api-key && codex exec --search --profile default --model ${input.cliModel} --dangerously-bypass-approvals-and-sandbox --json --skip-git-repo-check${reasoningFlag} '${escapedPrompt}'`;
+  const effectiveReasoningEffort = input.reasoningEffort ?? DEFAULT_REASONING_EFFORT;
+  const reasoningFlag = ` -c model_reasoning_effort="${effectiveReasoningEffort}"`;
+  const verbosityFlag = ` -c model_verbosity="${DEFAULT_MODEL_VERBOSITY}"`;
+  return `echo '${input.apiKey}' | codex login --with-api-key && codex exec --search --profile default --model ${input.cliModel} --dangerously-bypass-approvals-and-sandbox --json --skip-git-repo-check${reasoningFlag}${verbosityFlag} '${escapedPrompt}'`;
 }
 
 /**
- * Generate Codex profile config content.
+ * Default reasoning effort and verbosity baked into the generated Codex
+ * profile.
+ *
+ * The Codex CLI itself defaults both `model_reasoning_effort` and
+ * `model_verbosity` to `"low"`, but the default Codex model
+ * (`gpt-5.2-codex`) only accepts `"medium"` for both — so an out-of-the-box
+ * `codex exec` against the AI Gateway fails with:
+ *   "Unsupported value: 'low' is not supported with the 'gpt-5.2-codex'
+ *    model. Supported values are: 'medium'."
+ * (the error covers both the `reasoning.effort` and `text.verbosity` request
+ * parameters, depending on which the model rejected first).
+ *
+ * `"medium"` is also a valid value for the non-codex GPT-5.x models, so it's
+ * a safe default. Callers can override reasoning effort per-run via
+ * `model: "gpt-5.2-codex?reasoningEffort=high"`.
  */
-export function generateCodexConfig(model: string, useVercelAiGateway: boolean): string {
+const DEFAULT_REASONING_EFFORT = 'medium';
+const DEFAULT_MODEL_VERBOSITY = 'medium';
+
+/**
+ * Generate Codex profile config content.
+ *
+ * `reasoningEffort` and `model_verbosity` are written into the profile so a
+ * fresh `codex exec` doesn't pick up the CLI defaults of `"low"`, which are
+ * rejected by `gpt-5.2-codex`. Defaults to `"medium"` when `reasoningEffort`
+ * is omitted.
+ */
+export function generateCodexConfig(
+  model: string,
+  useVercelAiGateway: boolean,
+  reasoningEffort: string = DEFAULT_REASONING_EFFORT,
+): string {
   if (useVercelAiGateway) {
     // AI Gateway uses prefixed model names like "openai/gpt-5.2-codex"
     const fullModel = model.includes('/') ? model : `openai/${model}`;
     return `# Codex configuration for Vercel AI Gateway
 model_provider = "vercel"
 model = "${fullModel}"
+model_reasoning_effort = "${reasoningEffort}"
+model_verbosity = "${DEFAULT_MODEL_VERBOSITY}"
 
 [model_providers.vercel]
 name = "Vercel AI Gateway"
@@ -109,6 +142,8 @@ wire_api = "responses"
     return `# Direct OpenAI API configuration
 model_provider = "openai"
 model = "${directModel}"
+model_reasoning_effort = "${reasoningEffort}"
+model_verbosity = "${DEFAULT_MODEL_VERBOSITY}"
 `;
   }
 }
@@ -228,8 +263,11 @@ export function createCodexAgent({ useVercelAiGateway }: { useVercelAiGateway: b
       // Create Codex profile config. Recent Codex CLI versions reject the old
       // top-level `profile = "default"` key in config.toml and instead load
       // `$CODEX_HOME/<profile>.config.toml` when `--profile <profile>` is set.
+      // The reasoning_effort is baked into the profile (rather than passed via
+      // -c at runtime) so the value is visible in saved configs and so the
+      // CLI's own default of "low" can't sneak through.
       await sandbox.runShell('mkdir -p ~/.codex');
-      const configContent = generateCodexConfig(baseModel, useVercelAiGateway);
+      const configContent = generateCodexConfig(baseModel, useVercelAiGateway, reasoningEffort);
       await sandbox.runShell(`cat > ~/.codex/default.config.toml << 'EOF'
 ${configContent}
 EOF`);
@@ -241,6 +279,10 @@ EOF`);
       const envVarToSet = useVercelAiGateway ? AI_GATEWAY.apiKeyEnvVar : OPENAI_DIRECT.apiKeyEnvVar;
       // Direct OpenAI API needs unprefixed model names (e.g. "gpt-5.2-codex" not "openai/gpt-5.2-codex")
       const cliModel = useVercelAiGateway ? baseModel : (baseModel.includes('/') ? baseModel.split('/').pop()! : baseModel);
+      // Pass reasoning effort and verbosity via -c too; CLI flags have the
+      // highest precedence and we've observed Codex CLI silently falling back
+      // to its "low" defaults for both fields even when the profile sets them.
+      // Both default to "medium" for compatibility with gpt-5.2-codex.
       // codex login sets up bearer auth for the CLI; the built-in openai provider requires it
       const codexResult = await sandbox.runShell(
         buildCodexExecCommand({ apiKey: options.apiKey, cliModel, prompt: options.prompt, reasoningEffort }),

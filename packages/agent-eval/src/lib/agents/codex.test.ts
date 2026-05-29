@@ -30,5 +30,42 @@ describe('generateCodexConfig', () => {
     });
 
     expect(command).toContain('codex exec --search --profile default');
+    expect(command).toContain('model_reasoning_effort="medium"');
+    expect(command).toContain('model_verbosity="medium"');
+  });
+
+  it('defaults model_reasoning_effort and verbosity to "medium" for AI Gateway', () => {
+    // gpt-5.2-codex rejects the Codex CLI's "low" defaults for both
+    // reasoning.effort and text.verbosity — see comment on
+    // DEFAULT_REASONING_EFFORT / DEFAULT_MODEL_VERBOSITY in codex.ts.
+    const config = generateCodexConfig('openai/gpt-5.2-codex', true);
+
+    expect(config).toContain('model_reasoning_effort = "medium"');
+    expect(config).toContain('model_verbosity = "medium"');
+    expect(config).not.toContain('model_reasoning_effort = "low"');
+    expect(config).not.toContain('model_verbosity = "low"');
+  });
+
+  it('defaults model_reasoning_effort and verbosity to "medium" for direct OpenAI', () => {
+    const config = generateCodexConfig('openai/gpt-5.2-codex', false);
+
+    expect(config).toContain('model_reasoning_effort = "medium"');
+    expect(config).toContain('model_verbosity = "medium"');
+    expect(config).not.toContain('model_reasoning_effort = "low"');
+    expect(config).not.toContain('model_verbosity = "low"');
+  });
+
+  it('honors caller-provided reasoning effort for AI Gateway', () => {
+    const config = generateCodexConfig('openai/gpt-5.2-codex', true, 'high');
+
+    expect(config).toContain('model_reasoning_effort = "high"');
+    expect(config).not.toContain('model_reasoning_effort = "medium"');
+  });
+
+  it('honors caller-provided reasoning effort for direct OpenAI', () => {
+    const config = generateCodexConfig('openai/gpt-5.2-codex', false, 'low');
+
+    expect(config).toContain('model_reasoning_effort = "low"');
+    expect(config).not.toContain('model_reasoning_effort = "medium"');
   });
 });
