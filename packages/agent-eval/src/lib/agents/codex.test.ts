@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { buildCodexExecCommand, generateCodexConfig } from './codex.js';
+import { generateCodexConfig } from './codex.js';
 
 describe('generateCodexConfig', () => {
   it('writes AI Gateway settings as a Codex profile config', () => {
@@ -20,18 +20,6 @@ describe('generateCodexConfig', () => {
     expect(config).toContain('model = "gpt-5.2-codex"');
     expect(config).not.toContain('profile = "default"');
     expect(config).not.toContain('[profiles.default]');
-  });
-
-  it('enables web search in non-interactive runs', () => {
-    const command = buildCodexExecCommand({
-      apiKey: 'test-key',
-      cliModel: 'openai/gpt-5.2-codex',
-      prompt: 'where should this run?',
-    });
-
-    expect(command).toContain('codex exec --search --profile default');
-    expect(command).toContain('model_reasoning_effort="medium"');
-    expect(command).toContain('model_verbosity="medium"');
   });
 
   it('defaults model_reasoning_effort and verbosity to "medium" for AI Gateway', () => {
