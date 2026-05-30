@@ -1,5 +1,11 @@
 # @vercel/agent-eval
 
+## 0.14.5
+
+### Patch Changes
+
+- [#144](https://github.com/vercel-labs/agent-eval/pull/144) [`450bed3`](https://github.com/vercel-labs/agent-eval/commit/450bed3b94e024649ed771eb12157f9361533e6f) Thanks [@allenzhou101](https://github.com/allenzhou101)! - Revert "Enable source-capable web tools for agent runs" (#141), which broke CLI evals.
+
 ## 0.14.4
 
 ### Patch Changes
