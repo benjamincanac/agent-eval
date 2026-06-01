@@ -179,10 +179,13 @@ export async function runExperiment(
 
     let timeoutId: ReturnType<typeof setTimeout> | undefined;
 
+    const modelPolicy = config.modelPolicy ?? 'agent-default';
+    const requestedModel = modelPolicy === 'native-default' ? undefined : config.model;
     const agentResult = await Promise.race([
       agent.run(fixture.path, {
         prompt: config.editPrompt ? config.editPrompt(fixture.prompt) : fixture.prompt,
-        model: config.model,
+        model: requestedModel,
+        modelPolicy,
         timeout: timeoutMs,
         apiKey,
         setup: config.setup,
@@ -397,6 +400,7 @@ export async function runSingleEval<T extends ResolvedExperimentConfig['model']>
 	const agentResult = await agent.run(fixture.path, {
 		prompt,
 		model,
+		modelPolicy: 'agent-default',
 		timeout: options.timeout * 1000,
 		apiKey: options.apiKey,
 		setup: options.setup,

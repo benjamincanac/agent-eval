@@ -80,6 +80,32 @@ describe('computeFingerprint', () => {
     expect(fp1).not.toBe(fp2);
   });
 
+  it('keeps agent-default policy equivalent to existing fingerprints', () => {
+    const evalDir = createEvalDir('eval-policy-default', {
+      'PROMPT.md': 'Do something',
+      'EVAL.ts': 'test code',
+      'package.json': '{"type":"module"}',
+    });
+
+    const fp1 = computeFingerprint(evalDir, baseConfig);
+    const fp2 = computeFingerprint(evalDir, { ...baseConfig, modelPolicy: 'agent-default' });
+
+    expect(fp1).toBe(fp2);
+  });
+
+  it('changes for native-default policy', () => {
+    const evalDir = createEvalDir('eval-policy-native', {
+      'PROMPT.md': 'Do something',
+      'EVAL.ts': 'test code',
+      'package.json': '{"type":"module"}',
+    });
+
+    const fp1 = computeFingerprint(evalDir, baseConfig);
+    const fp2 = computeFingerprint(evalDir, { ...baseConfig, model: 'native-default', modelPolicy: 'native-default' });
+
+    expect(fp1).not.toBe(fp2);
+  });
+
   it('changes when config timeout changes', () => {
     const evalDir = createEvalDir('eval-4', {
       'PROMPT.md': 'Do something',

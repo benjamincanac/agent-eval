@@ -163,17 +163,22 @@ export function createCursorAgent(): Agent {
         // --print: non-interactive mode (required for scripts/headless)
         // --force: auto-approve all tool operations
         // --output-format stream-json: structured JSONL transcript (only works with --print)
+        const cursorArgs = [
+          options.prompt,
+          '--print',
+          '--force',
+        ];
+        if (options.model) {
+          cursorArgs.push('--model', options.model);
+        }
+        cursorArgs.push(
+          '--output-format',
+          'stream-json',
+        );
+
         const cursorResult = await sandbox.runCommand(
           'agent',
-          [
-            options.prompt,
-            '--print',
-            '--force',
-            '--model',
-            options.model,
-            '--output-format',
-            'stream-json',
-          ],
+          cursorArgs,
           {
             env: {
               [CURSOR_DIRECT.apiKeyEnvVar]: options.apiKey,

@@ -21,6 +21,16 @@ export type AgentType =
 export type ModelTier = string;
 
 /**
+ * How agent-eval chooses the model for a run.
+ * - agent-default: existing behavior; omitted model resolves to the adapter default.
+ * - native-default: do not pass a model override; let the underlying CLI choose.
+ */
+export type ModelPolicy = 'agent-default' | 'native-default';
+
+/** Stable label used in result paths and fingerprints for native CLI defaults. */
+export const NATIVE_DEFAULT_MODEL = 'native-default' as const;
+
+/**
  * Function type for filtering evals.
  */
 export type EvalFilter = (name: string) => boolean;
@@ -92,6 +102,9 @@ export interface ExperimentConfig {
    * Default is agent-specific: 'opus' for claude-code, 'openai/gpt-5.2-codex' for codex */
   model?: ModelTier | ModelTier[];
 
+  /** Model selection policy. Defaults to existing agent-eval adapter defaults. */
+  modelPolicy?: ModelPolicy;
+
   /** Which evals to run. Can be a string, array, or filter function. @default '*' (all evals) */
   evals?: string | string[] | EvalFilter;
 
@@ -143,6 +156,7 @@ export interface ExperimentConfig {
 export interface ResolvedExperimentConfig {
   agent: AgentType;
   model: ModelTier | ModelTier[];
+  modelPolicy?: ModelPolicy;
   evals: string | string[] | EvalFilter;
   runs: number;
   earlyExit: boolean;
@@ -164,6 +178,7 @@ export interface ResolvedExperimentConfig {
 export interface RunnableExperimentConfig {
   agent: AgentType;
   model: ModelTier;
+  modelPolicy?: ModelPolicy;
   evals: string | string[] | EvalFilter;
   runs: number;
   earlyExit: boolean;
@@ -218,6 +233,12 @@ export interface EvalRunResult {
   duration: number;
   /** Model used for this run */
   model?: string;
+  /** Model selection policy used for this run */
+  modelPolicy?: ModelPolicy;
+  /** Explicit model requested by the caller, if any */
+  requestedModel?: string;
+  /** Model reported by the underlying agent CLI, when observable */
+  observedModel?: string;
   /** Path to parsed transcript file (relative to run directory) */
   transcriptPath?: string;
   /** Path to raw transcript file (relative to run directory) */

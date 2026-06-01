@@ -75,6 +75,62 @@ function extractTranscriptFromOutput(output: string): string | undefined {
   return lines.join('\n');
 }
 
+export function extractCodexThreadId(output: string): string | undefined {
+  for (const line of output.split('\n')) {
+    if (!line.trim()) continue;
+    try {
+      const event = JSON.parse(line) as { type?: string; thread_id?: unknown };
+      if (event.type === 'thread.started' && typeof event.thread_id === 'string') {
+        return event.thread_id;
+      }
+    } catch {
+      // Ignore non-JSON output lines.
+    }
+  }
+
+  return undefined;
+}
+
+export function extractObservedModelFromCodexSession(transcript: string | undefined): string | undefined {
+  if (!transcript) return undefined;
+
+  let observedModel: string | undefined;
+  for (const line of transcript.split('\n')) {
+    if (!line.trim()) continue;
+    try {
+      const event = JSON.parse(line) as {
+        type?: string;
+        payload?: { model?: unknown; collaboration_mode?: { settings?: { model?: unknown } } };
+      };
+      const model = event.payload?.model ?? event.payload?.collaboration_mode?.settings?.model;
+      if (event.type === 'turn_context' && typeof model === 'string') {
+        observedModel = model;
+      }
+    } catch {
+      // Ignore non-JSON transcript lines.
+    }
+  }
+
+  return observedModel;
+}
+
+async function captureCodexSessionTranscript(sandbox: AnySandbox, threadId: string | undefined): Promise<string | undefined> {
+  try {
+    const escapedThreadId = threadId?.replace(/'/g, "'\\''");
+    const command = escapedThreadId
+      ? `find ~/.codex/sessions -type f -name '*${escapedThreadId}*.jsonl' -print 2>/dev/null | head -1`
+      : `find ~/.codex/sessions -type f -name '*.jsonl' -print 2>/dev/null | sort | tail -1`;
+    const findResult = await sandbox.runShell(command);
+    if (findResult.exitCode !== 0 || !findResult.stdout.trim()) {
+      return undefined;
+    }
+
+    return await sandbox.readFile(findResult.stdout.trim());
+  } catch {
+    return undefined;
+  }
+}
+
 /**
  * Default reasoning effort and verbosity baked into the generated Codex
  * profile.
@@ -104,19 +160,17 @@ const DEFAULT_MODEL_VERBOSITY = 'medium';
  * is omitted.
  */
 export function generateCodexConfig(
-  model: string,
+  model: string | undefined,
   useVercelAiGateway: boolean,
-  reasoningEffort: string = DEFAULT_REASONING_EFFORT,
+  reasoningEffort?: string,
 ): string {
   if (useVercelAiGateway) {
-    // AI Gateway uses prefixed model names like "openai/gpt-5.2-codex"
-    const fullModel = model.includes('/') ? model : `openai/${model}`;
+    // AI Gateway uses prefixed model names like "openai/gpt-5.2-codex".
+    // Native-default runs intentionally omit model and reasoning overrides.
+    const fullModel = model ? (model.includes('/') ? model : `openai/${model}`) : undefined;
     return `# Codex configuration for Vercel AI Gateway
 model_provider = "vercel"
-model = "${fullModel}"
-model_reasoning_effort = "${reasoningEffort}"
-model_verbosity = "${DEFAULT_MODEL_VERBOSITY}"
-
+${fullModel ? `model = "${fullModel}"\n` : ''}${model ? `model_reasoning_effort = "${reasoningEffort ?? DEFAULT_REASONING_EFFORT}"\nmodel_verbosity = "${DEFAULT_MODEL_VERBOSITY}"\n` : ''}
 [model_providers.vercel]
 name = "Vercel AI Gateway"
 base_url = "${AI_GATEWAY.openAiBaseUrl}"
@@ -124,14 +178,12 @@ env_key = "${AI_GATEWAY.apiKeyEnvVar}"
 wire_api = "responses"
 `;
   } else {
-    // Direct OpenAI API — use the built-in "openai" provider (no custom provider needed)
-    const directModel = model.includes('/') ? model.split('/').pop()! : model;
+    // Direct OpenAI API — use the built-in "openai" provider (no custom provider needed).
+    // Native-default runs intentionally omit model and reasoning overrides.
+    const directModel = model ? (model.includes('/') ? model.split('/').pop()! : model) : undefined;
     return `# Direct OpenAI API configuration
 model_provider = "openai"
-model = "${directModel}"
-model_reasoning_effort = "${reasoningEffort}"
-model_verbosity = "${DEFAULT_MODEL_VERBOSITY}"
-`;
+${directModel ? `model = "${directModel}"\n` : ''}${model ? `model_reasoning_effort = "${reasoningEffort ?? DEFAULT_REASONING_EFFORT}"\nmodel_verbosity = "${DEFAULT_MODEL_VERBOSITY}"\n` : ''}`;
   }
 }
 
@@ -244,15 +296,18 @@ export function createCodexAgent({ useVercelAiGateway }: { useVercelAiGateway: b
         throw new Error(`Codex CLI install failed: ${cliInstall.stderr}`);
       }
 
-      // Parse model string for query parameters (e.g. "gpt-5.2-codex?reasoningEffort=high")
-      const { model: baseModel, reasoningEffort } = parseModelString(options.model);
+      // Parse model string for query parameters (e.g. "gpt-5.2-codex?reasoningEffort=high").
+      // Native-default runs intentionally leave the model undefined.
+      const parsedModel = options.model ? parseModelString(options.model) : { model: undefined, reasoningEffort: undefined };
+      const { model: baseModel, reasoningEffort } = parsedModel;
 
       // Create Codex profile config. Recent Codex CLI versions reject the old
       // top-level `profile = "default"` key in config.toml and instead load
       // `$CODEX_HOME/<profile>.config.toml` when `--profile <profile>` is set.
-      // The reasoning_effort is baked into the profile (rather than passed via
-      // -c at runtime) so the value is visible in saved configs and so the
-      // CLI's own default of "low" can't sneak through.
+      // For explicit models, reasoning_effort is baked into the profile (rather
+      // than passed via -c at runtime) so the value is visible in saved configs
+      // and so the CLI's own default of "low" can't sneak through. For
+      // native-default runs we omit these settings to match the CLI's behavior.
       await sandbox.runShell('mkdir -p ~/.codex');
       const configContent = generateCodexConfig(baseModel, useVercelAiGateway, reasoningEffort);
       await sandbox.runShell(`cat > ~/.codex/default.config.toml << 'EOF'
@@ -266,22 +321,28 @@ EOF`);
       const envVarToSet = useVercelAiGateway ? AI_GATEWAY.apiKeyEnvVar : OPENAI_DIRECT.apiKeyEnvVar;
       const escapedPrompt = options.prompt.replace(/'/g, "'\\''");
       // Direct OpenAI API needs unprefixed model names (e.g. "gpt-5.2-codex" not "openai/gpt-5.2-codex")
-      const cliModel = useVercelAiGateway ? baseModel : (baseModel.includes('/') ? baseModel.split('/').pop()! : baseModel);
+      const cliModel = baseModel
+        ? (useVercelAiGateway ? baseModel : (baseModel.includes('/') ? baseModel.split('/').pop()! : baseModel))
+        : undefined;
+      const modelFlag = cliModel ? ` --model ${cliModel}` : '';
       // Pass reasoning effort and verbosity via -c too; CLI flags have the
       // highest precedence and we've observed Codex CLI silently falling back
       // to its "low" defaults for both fields even when the profile sets them.
       // Both default to "medium" for compatibility with gpt-5.2-codex.
-      const effectiveReasoningEffort = reasoningEffort ?? DEFAULT_REASONING_EFFORT;
-      const reasoningFlag = ` -c model_reasoning_effort="${effectiveReasoningEffort}"`;
-      const verbosityFlag = ` -c model_verbosity="${DEFAULT_MODEL_VERBOSITY}"`;
+      const effectiveReasoningEffort = baseModel ? (reasoningEffort ?? DEFAULT_REASONING_EFFORT) : undefined;
+      const reasoningFlag = effectiveReasoningEffort ? ` -c model_reasoning_effort="${effectiveReasoningEffort}"` : '';
+      const verbosityFlag = baseModel ? ` -c model_verbosity="${DEFAULT_MODEL_VERBOSITY}"` : '';
       // codex login sets up bearer auth for the CLI; the built-in openai provider requires it
       const codexResult = await sandbox.runShell(
-        `echo '${options.apiKey}' | codex login --with-api-key && codex exec --profile default --model ${cliModel} --dangerously-bypass-approvals-and-sandbox --json --skip-git-repo-check${reasoningFlag}${verbosityFlag} '${escapedPrompt}'`,
+        `echo '${options.apiKey}' | codex login --with-api-key && codex exec --profile default${modelFlag} --dangerously-bypass-approvals-and-sandbox --json --skip-git-repo-check${reasoningFlag}${verbosityFlag} '${escapedPrompt}'`,
         { [envVarToSet]: options.apiKey, ...neutralWorkspace.env }
       );
 
       agentOutput = codexResult.stdout + codexResult.stderr;
       transcript = extractTranscriptFromOutput(agentOutput);
+      const threadId = extractCodexThreadId(agentOutput);
+      const sessionTranscript = await captureCodexSessionTranscript(sandbox, threadId);
+      const observedModel = extractObservedModelFromCodexSession(sessionTranscript);
 
       if (codexResult.exitCode !== 0) {
         // Extract meaningful error from output (last few lines usually contain the error)
@@ -293,6 +354,7 @@ EOF`);
           error: errorLines || `Codex CLI exited with code ${codexResult.exitCode}`,
           duration: Date.now() - startTime,
           sandboxId: sandbox.sandboxId,
+          observedModel,
         };
       }
 
@@ -323,6 +385,7 @@ EOF`);
         sandboxId: sandbox.sandboxId,
         generatedFiles,
         deletedFiles,
+        observedModel,
       };
     } catch (error) {
       // Check if this was an abort

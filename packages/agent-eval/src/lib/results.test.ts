@@ -195,6 +195,9 @@ describe('results utilities', () => {
       );
       expect(resultJson.status).toBe('passed');
       expect(resultJson.duration).toBe(10);
+      expect(resultJson.modelPolicy).toBeUndefined();
+      expect(resultJson.requestedModel).toBeUndefined();
+      expect(resultJson.observedModel).toBeUndefined();
       // Should have paths to transcript and outputs
       expect(resultJson.transcriptPath).toBe('./transcript.json');
       expect(resultJson.transcriptRawPath).toBe('./transcript-raw.jsonl');
@@ -224,6 +227,45 @@ describe('results utilities', () => {
       expect(parsedTranscript).toHaveProperty('agent');
       expect(parsedTranscript).toHaveProperty('events');
       expect(parsedTranscript).toHaveProperty('summary');
+    });
+
+    it('saves observed model metadata for native-default runs', () => {
+      const config: ResolvedExperimentConfig = {
+        agent: 'vercel-ai-gateway/opencode',
+        model: 'native-default',
+        modelPolicy: 'native-default',
+        evals: ['eval-1'],
+        runs: 1,
+        earlyExit: true,
+        scripts: [],
+        timeout: 300,
+      };
+
+      const evals = [
+        createEvalSummary('eval-1', [
+          { result: { status: 'passed', duration: 10, observedModel: 'vercel/openai/gpt-5.5' } },
+        ]),
+      ];
+
+      const results = createExperimentResults(
+        config,
+        evals,
+        new Date('2024-01-26T12:00:00Z'),
+        new Date('2024-01-26T12:01:00Z')
+      );
+
+      const outputDir = saveResults(results, {
+        resultsDir: TEST_DIR,
+        experimentName: 'native-default-test',
+      });
+
+      const resultJson = JSON.parse(
+        readFileSync(join(outputDir, 'eval-1', 'run-1', 'result.json'), 'utf-8')
+      );
+      expect(resultJson.modelPolicy).toBe('native-default');
+      expect(resultJson.model).toBe('vercel/openai/gpt-5.5');
+      expect(resultJson.requestedModel).toBeUndefined();
+      expect(resultJson.observedModel).toBe('vercel/openai/gpt-5.5');
     });
 
     it('does not collide when script is named "eval"', () => {

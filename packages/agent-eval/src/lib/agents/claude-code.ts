@@ -57,6 +57,25 @@ async function captureTranscript(sandbox: AnySandbox): Promise<string | undefine
   }
 }
 
+export function extractObservedModelFromClaudeTranscript(transcript: string | undefined): string | undefined {
+  if (!transcript) return undefined;
+
+  let observedModel: string | undefined;
+  for (const line of transcript.split('\n')) {
+    if (!line.trim()) continue;
+    try {
+      const event = JSON.parse(line) as { message?: { model?: unknown } };
+      if (typeof event.message?.model === 'string') {
+        observedModel = event.message.model;
+      }
+    } catch {
+      // Ignore non-JSON transcript lines.
+    }
+  }
+
+  return observedModel;
+}
+
 /**
  * Create Claude Code agent with specified authentication method.
  */
@@ -202,7 +221,11 @@ export function createClaudeCodeAgent({ useVercelAiGateway }: { useVercelAiGatew
       }
 
       // Build CLI arguments
-      const cliArgs = ['--print', '--model', options.model, '--dangerously-skip-permissions'];
+      const cliArgs = ['--print'];
+      if (options.model) {
+        cliArgs.push('--model', options.model);
+      }
+      cliArgs.push('--dangerously-skip-permissions');
       const effort = options.agentOptions?.effort as string | undefined;
       if (effort) {
         cliArgs.push('--effort', effort);
@@ -222,6 +245,7 @@ export function createClaudeCodeAgent({ useVercelAiGateway }: { useVercelAiGatew
 
       if (claudeResult.exitCode !== 0) {
         await captureTranscriptBestEffort();
+        const observedModel = extractObservedModelFromClaudeTranscript(transcript);
         // Extract meaningful error from output (last few lines usually contain the error)
         const errorLines = agentOutput.trim().split('\n').slice(-5).join('\n');
         hasReturned = true;
@@ -232,11 +256,13 @@ export function createClaudeCodeAgent({ useVercelAiGateway }: { useVercelAiGatew
           error: errorLines || `Claude Code exited with code ${claudeResult.exitCode}`,
           duration: Date.now() - startTime,
           sandboxId: sandbox.sandboxId,
+          observedModel,
         };
       }
 
       // Capture transcript before validation when available
       await captureTranscriptBestEffort();
+      const observedModel = extractObservedModelFromClaudeTranscript(transcript);
 
       if (options.validation !== 'none') {
         // Upload test files for validation
@@ -266,6 +292,7 @@ export function createClaudeCodeAgent({ useVercelAiGateway }: { useVercelAiGatew
         sandboxId: sandbox.sandboxId,
         generatedFiles,
         deletedFiles,
+        observedModel,
       };
     } catch (error) {
       await captureTranscriptBestEffort();
