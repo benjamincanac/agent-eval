@@ -9,13 +9,13 @@ import type {
   ResolvedExperimentConfig,
   EvalFilter,
 } from './types.js';
+import { NATIVE_DEFAULT_MODEL } from './types.js';
 import { getAgent } from './agents/index.js';
 
 /**
  * Default configuration values.
  */
 export const CONFIG_DEFAULTS = {
-  model: 'opus' as const,
   evals: '*' as const,
   runs: 1,
   earlyExit: true,
@@ -86,14 +86,15 @@ export function validateConfig(config: unknown): ExperimentConfig {
  */
 export function resolveConfig(config: ExperimentConfig): ResolvedExperimentConfig {
   // Validate agent exists
-  const agent = getAgent(config.agent);
-  
-  // Get the default model based on the agent type
-  const defaultModel = config.model ?? agent.getDefaultModel();
+  getAgent(config.agent);
+
+  const modelPolicy = config.model === undefined ? 'native-default' : 'agent-default';
+  const defaultModel = config.model ?? NATIVE_DEFAULT_MODEL;
 
   return {
     agent: config.agent,
     model: defaultModel,
+    modelPolicy,
     evals: config.evals ?? '*',
     runs: config.runs ?? CONFIG_DEFAULTS.runs,
     earlyExit: config.earlyExit ?? CONFIG_DEFAULTS.earlyExit,

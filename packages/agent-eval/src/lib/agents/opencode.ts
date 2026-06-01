@@ -49,6 +49,26 @@ function extractTranscriptFromOutput(output: string): string | undefined {
   return lines.join('\n');
 }
 
+export function extractObservedModelFromOpenCodeOutput(output: string): string | undefined {
+  let observedModel: string | undefined;
+
+  for (const line of output.split('\n')) {
+    if (!line.includes('service=llm') || !line.includes('small=false') || !line.includes('agent=build')) {
+      continue;
+    }
+
+    const providerMatch = line.match(/providerID=([^\s]+)/);
+    const modelMatch = line.match(/modelID=([^\s]+)/);
+    const providerID = providerMatch?.[1];
+    const modelID = modelMatch?.[1];
+    if (providerID && modelID) {
+      observedModel = `${providerID}/${modelID}`;
+    }
+  }
+
+  return observedModel;
+}
+
 /**
  * Additional provider configuration for models not yet available in the
  * default Vercel AI Gateway (e.g., early access / unreleased models).
@@ -232,18 +252,24 @@ export function createOpenCodeAgent(): Agent {
         // Verify no test files in sandbox
         await verifyNoTestFiles(sandbox);
 
-        // Run OpenCode CLI using run mode for non-interactive execution
-        // Use --format json for structured output (transcript)
+        // Run OpenCode CLI using run mode for non-interactive execution.
+        // Use --format json for structured output (transcript). Native-default
+        // runs print logs so we can capture the CLI-selected model.
+        const opencodeArgs = [
+          'run',
+          options.prompt,
+          '--format',
+          'json',
+        ];
+        if (options.model) {
+          opencodeArgs.push('--model', options.model);
+        } else if (options.modelPolicy === 'native-default') {
+          opencodeArgs.push('--print-logs', '--log-level', 'INFO');
+        }
+
         const opencodeResult = await sandbox.runCommand(
           'opencode',
-          [
-            'run',
-            options.prompt,
-            '--model',
-            options.model,
-            '--format',
-            'json',
-          ],
+          opencodeArgs,
           {
             env: {
               [AI_GATEWAY.apiKeyEnvVar]: options.apiKey,
@@ -254,6 +280,7 @@ export function createOpenCodeAgent(): Agent {
 
         agentOutput = opencodeResult.stdout + opencodeResult.stderr;
         transcript = extractTranscriptFromOutput(agentOutput);
+        const observedModel = extractObservedModelFromOpenCodeOutput(agentOutput);
 
         if (opencodeResult.exitCode !== 0) {
           // Extract meaningful error from output (last few lines usually contain the error)
@@ -265,6 +292,7 @@ export function createOpenCodeAgent(): Agent {
             error: errorLines || `OpenCode CLI exited with code ${opencodeResult.exitCode}`,
             duration: Date.now() - startTime,
             sandboxId: sandbox.sandboxId,
+            observedModel,
           };
         }
 
@@ -295,6 +323,7 @@ export function createOpenCodeAgent(): Agent {
           sandboxId: sandbox.sandboxId,
           generatedFiles,
           deletedFiles,
+          observedModel,
         };
       } catch (error) {
         // Check if this was an abort

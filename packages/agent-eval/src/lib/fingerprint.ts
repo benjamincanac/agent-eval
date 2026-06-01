@@ -17,6 +17,7 @@ import type { RunnableExperimentConfig } from './types.js';
 interface FingerprintableConfig {
   agent: string;
   model: string;
+  modelPolicy?: string;
   scripts: string[];
   timeout: number;
   earlyExit: boolean;
@@ -73,6 +74,9 @@ export function computeFingerprint(evalPath: string, config: RunnableExperimentC
     earlyExit: config.earlyExit,
     runs: config.runs,
   };
+  if (config.modelPolicy === 'native-default') {
+    configForHash.modelPolicy = config.modelPolicy;
+  }
   hash.update(`config:${JSON.stringify(configForHash)}`);
 
   return hash.digest('hex');

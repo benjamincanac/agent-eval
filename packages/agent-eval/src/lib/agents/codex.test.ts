@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { generateCodexConfig } from './codex.js';
+import { extractCodexThreadId, extractObservedModelFromCodexSession, generateCodexConfig } from './codex.js';
 
 describe('generateCodexConfig', () => {
   it('writes AI Gateway settings as a Codex profile config', () => {
@@ -55,5 +55,43 @@ describe('generateCodexConfig', () => {
 
     expect(config).toContain('model_reasoning_effort = "low"');
     expect(config).not.toContain('model_reasoning_effort = "medium"');
+  });
+
+  it('omits model and reasoning overrides for native-default AI Gateway runs', () => {
+    const config = generateCodexConfig(undefined, true);
+
+    expect(config).toContain('model_provider = "vercel"');
+    expect(config).not.toMatch(/^model =/m);
+    expect(config).not.toContain('model_reasoning_effort');
+    expect(config).not.toContain('model_verbosity');
+  });
+
+  it('omits model and reasoning overrides for native-default direct OpenAI runs', () => {
+    const config = generateCodexConfig(undefined, false);
+
+    expect(config).toContain('model_provider = "openai"');
+    expect(config).not.toMatch(/^model =/m);
+    expect(config).not.toContain('model_reasoning_effort');
+    expect(config).not.toContain('model_verbosity');
+  });
+});
+
+describe('Codex observed model extraction', () => {
+  it('extracts the thread id from Codex JSON output', () => {
+    const output = [
+      JSON.stringify({ type: 'thread.started', thread_id: 'thread-123' }),
+      JSON.stringify({ type: 'turn.started' }),
+    ].join('\n');
+
+    expect(extractCodexThreadId(output)).toBe('thread-123');
+  });
+
+  it('extracts the observed model from the Codex session transcript', () => {
+    const transcript = [
+      JSON.stringify({ type: 'session_meta', payload: { model_provider: 'vercel' } }),
+      JSON.stringify({ type: 'turn_context', payload: { model: 'gpt-5.5' } }),
+    ].join('\n');
+
+    expect(extractObservedModelFromCodexSession(transcript)).toBe('gpt-5.5');
   });
 });

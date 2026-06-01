@@ -175,7 +175,7 @@ const config: ExperimentConfig = {
   // Required: which agent to use
   agent: 'vercel-ai-gateway/claude-code',
 
-  // Model to use (defaults vary by agent)
+  // Model to use. Omit this to use the underlying agent CLI's native default.
   // Provide an array to run the same experiment across multiple models.
   model: 'opus',
 
@@ -269,6 +269,23 @@ const config: ExperimentConfig = {
   runs: 10,
 };
 ```
+
+### Native agent defaults
+
+When `model` is omitted, Agent Eval does not pass a model override. The
+underlying agent CLI chooses the same native default it would use for a normal
+user run:
+
+```typescript
+const config: ExperimentConfig = {
+  agent: 'vercel-ai-gateway/claude-code',
+  runs: 10,
+};
+```
+
+Results use `modelPolicy: 'native-default'`, `requestedModel` is omitted, and
+`observedModel` is populated when the agent CLI exposes the runtime model in its
+transcript or logs. Provide `model` to force a specific model.
 
 ### OpenCode model format
 

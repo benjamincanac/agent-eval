@@ -163,18 +163,23 @@ export function createGeminiAgent(): Agent {
 
         // Run Gemini CLI with direct API access
         // Using stream-json format for detailed event transcript (similar to Codex's --json)
+        const geminiArgs = [
+          '--prompt',
+          options.prompt,
+        ];
+        if (options.model) {
+          geminiArgs.push('--model', options.model);
+        }
+        geminiArgs.push(
+          '--approval-mode',
+          'yolo',
+          '--output-format',
+          'stream-json',
+        );
+
         const geminiResult = await sandbox.runCommand(
           'gemini',
-          [
-            '--prompt',
-            options.prompt,
-            '--model',
-            options.model,
-            '--approval-mode',
-            'yolo',
-            '--output-format',
-            'stream-json',
-          ],
+          geminiArgs,
           {
             env: {
               [GEMINI_DIRECT.apiKeyEnvVar]: options.apiKey,

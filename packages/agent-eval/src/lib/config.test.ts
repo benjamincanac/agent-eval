@@ -68,11 +68,12 @@ describe('resolveConfig', () => {
     const resolved = resolveConfig(config);
 
     expect(resolved.agent).toBe('claude-code');
-    expect(resolved.model).toBe('opus');
+    expect(resolved.model).toBe('native-default');
     expect(resolved.runs).toBe(CONFIG_DEFAULTS.runs);
     expect(resolved.earlyExit).toBe(CONFIG_DEFAULTS.earlyExit);
     expect(resolved.validation).toBe(CONFIG_DEFAULTS.validation);
     expect(resolved.evals).toBe('*');
+    expect(resolved.modelPolicy).toBe('native-default');
   });
 
   it('preserves provided values', () => {
@@ -85,6 +86,7 @@ describe('resolveConfig', () => {
     const resolved = resolveConfig(config);
 
     expect(resolved.model).toBe('haiku');
+    expect(resolved.modelPolicy).toBe('agent-default');
     expect(resolved.runs).toBe(10);
     expect(resolved.earlyExit).toBe(false);
   });

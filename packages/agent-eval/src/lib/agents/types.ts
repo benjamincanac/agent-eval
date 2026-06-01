@@ -2,7 +2,7 @@
  * Agent interface and common types for all agents.
  */
 
-import type { ModelTier, SetupFunction, SandboxBackend, ValidationMode } from '../types.js';
+import type { ModelPolicy, ModelTier, SetupFunction, SandboxBackend, ValidationMode } from '../types.js';
 
 /**
  * Common options for all agents.
@@ -10,8 +10,10 @@ import type { ModelTier, SetupFunction, SandboxBackend, ValidationMode } from '.
 export interface AgentRunOptions {
   /** The prompt/task for the agent */
   prompt: string;
-  /** Model to use (agent-specific) */
-  model: ModelTier;
+  /** Model to use (agent-specific). Undefined means do not pass a model override. */
+  model?: ModelTier;
+  /** Model selection policy for this run. */
+  modelPolicy?: ModelPolicy;
   /** Timeout in milliseconds */
   timeout: number;
   /** API key for the agent */
@@ -62,6 +64,8 @@ export interface AgentRunResult {
   generatedFiles?: Record<string, string>;
   /** Files deleted by the agent */
   deletedFiles?: string[];
+  /** Model reported by the underlying agent CLI, when observable */
+  observedModel?: string;
 }
 
 /**

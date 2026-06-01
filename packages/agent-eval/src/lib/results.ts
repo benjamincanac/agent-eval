@@ -54,12 +54,17 @@ export function agentResultToEvalRunData(
 		}
 	}
 
+	const result: EvalRunResult = {
+		status: agentResult.success ? 'passed' : 'failed',
+		error: agentResult.error,
+		duration: agentResult.duration / 1000, // Convert to seconds
+	};
+	if (agentResult.observedModel) {
+		result.observedModel = agentResult.observedModel;
+	}
+
 	return {
-		result: {
-			status: agentResult.success ? 'passed' : 'failed',
-			error: agentResult.error,
-			duration: agentResult.duration / 1000, // Convert to seconds
-		},
+		result,
 		transcript: agentResult.transcript,
 		outputContent:
 			Object.keys(outputContent).length > 0 ? outputContent : undefined,
@@ -188,13 +193,21 @@ export function saveResults(
 			mkdirSync(runDir, { recursive: true });
 
 			// Build the result with paths and o11y summary
-			const model = results.config.model;
+			const modelPolicy = results.config.modelPolicy ?? 'agent-default';
+			const requestedModel = modelPolicy === 'native-default' ? undefined : results.config.model;
+			const { observedModel, ...baseResult } = runData.result;
+			const model = modelPolicy === 'native-default' ? (observedModel ?? results.config.model) : results.config.model;
 			const resultWithPaths: EvalRunResult & {
 				o11y?: Transcript['summary'];
 			} = {
-				...runData.result,
+				...baseResult,
 				model,
 			};
+			if (modelPolicy === 'native-default') {
+				resultWithPaths.modelPolicy = modelPolicy;
+				resultWithPaths.requestedModel = requestedModel;
+				resultWithPaths.observedModel = observedModel;
+			}
 
 			// Save transcripts if available
 			if (runData.transcript) {

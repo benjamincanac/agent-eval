@@ -8,6 +8,7 @@
 export type {
   AgentType,
   ModelTier,
+  ModelPolicy,
   EvalFilter,
   ValidationMode,
   BrandConfig,
@@ -28,7 +29,7 @@ export type {
 } from './lib/types.js';
 
 // Re-export constants
-export { REQUIRED_EVAL_FILES, EXCLUDED_FILES } from './lib/types.js';
+export { REQUIRED_EVAL_FILES, EXCLUDED_FILES, NATIVE_DEFAULT_MODEL } from './lib/types.js';
 
 // Re-export config utilities
 export {

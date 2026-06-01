@@ -546,6 +546,7 @@ describe('runExperiment', () => {
       expect(mockAgent.run).toHaveBeenCalledWith('/fake/path', {
         prompt: 'Test prompt for agent',
         model: 'opus',
+        modelPolicy: 'agent-default',
         timeout: 600000, // Should be converted to milliseconds
         apiKey: 'my-api-key',
         setup: mockSetup,
@@ -555,6 +556,59 @@ describe('runExperiment', () => {
         sandbox: undefined,
         agentOptions: undefined,
       });
+    });
+
+    it('does not pass a model override for native-default policy', async () => {
+      const mockAgent: Agent = {
+        name: 'mock-agent',
+        displayName: 'Mock Agent',
+        getApiKeyEnvVar: () => 'MOCK_API_KEY',
+        getDefaultModel: () => 'mock-model',
+        run: vi.fn().mockResolvedValue({
+          success: true,
+          output: 'Agent output',
+          duration: 1000,
+          observedModel: 'runtime-model',
+          testResult: { success: true, output: 'Test passed' },
+          scriptsResults: {},
+        }),
+      };
+
+      vi.spyOn(agentsIndex, 'getAgent').mockReturnValue(mockAgent);
+
+      const config: ResolvedExperimentConfig = {
+        agent: 'claude-code',
+        model: 'native-default',
+        modelPolicy: 'native-default',
+        evals: ['test-eval'],
+        runs: 1,
+        earlyExit: false,
+        scripts: [],
+        timeout: 600,
+      };
+
+      const fixtures: EvalFixture[] = [
+        {
+          name: 'test-eval',
+          path: '/fake/path',
+          prompt: 'Test prompt for agent',
+          isModule: true,
+        },
+      ];
+
+      const results = await runExperiment({
+        config,
+        fixtures,
+        apiKey: 'my-api-key',
+        resultsDir: TEST_DIR,
+        experimentName: 'test-experiment',
+      });
+
+      expect(mockAgent.run).toHaveBeenCalledWith('/fake/path', expect.objectContaining({
+        model: undefined,
+        modelPolicy: 'native-default',
+      }));
+      expect(results.evals[0].runs[0].result.observedModel).toBe('runtime-model');
     });
 
     it('passes response-only validation mode to the agent', async () => {

@@ -112,7 +112,8 @@ describe.skipIf(!process.env.INTEGRATION_TEST)('integration tests', () => {
       const config = await loadConfig(configPath);
 
       expect(config.agent).toBe('vercel-ai-gateway/claude-code');
-      expect(config.model).toBe('opus');
+      expect(config.model).toBe('native-default');
+      expect(config.modelPolicy).toBe('native-default');
     });
 
     it('can load Codex experiment config from generated project', async () => {
@@ -122,7 +123,8 @@ describe.skipIf(!process.env.INTEGRATION_TEST)('integration tests', () => {
       const config = await loadConfig(configPath);
 
       expect(config.agent).toBe('vercel-ai-gateway/codex');
-      expect(config.model).toBe('openai/gpt-5.2-codex');
+      expect(config.model).toBe('native-default');
+      expect(config.modelPolicy).toBe('native-default');
     });
   });
 
@@ -1386,7 +1388,7 @@ test('greet exists', () => {
       expect(result).toContain('DRY RUN');
       expect(result).toContain('add-greeting');
       expect(result).toContain('Agent: vercel-ai-gateway/codex');
-      expect(result).toContain('Model: openai/gpt-5.2-codex');
+      expect(result).toContain('Model: native-default');
     });
   });
 });
