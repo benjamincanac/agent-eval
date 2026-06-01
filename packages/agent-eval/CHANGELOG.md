@@ -1,5 +1,11 @@
 # @vercel/agent-eval
 
+## 1.0.0
+
+### Major Changes
+
+- [#146](https://github.com/vercel-labs/agent-eval/pull/146) [`aa66c4d`](https://github.com/vercel-labs/agent-eval/commit/aa66c4d35b121e66470cbd49ac3d6ba3bb976325) Thanks [@molebox](https://github.com/molebox)! - Change omitted `model` config to use the underlying agent CLI's native default instead of agent-eval's hardcoded adapter defaults, and record observed runtime model metadata when available.
+
 ## 0.14.5
 
 ### Patch Changes
