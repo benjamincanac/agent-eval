@@ -1,5 +1,5 @@
 ---
-"@vercel/agent-eval": minor
+"@vercel/agent-eval": major
 ---
 
-Add an opt-in `modelPolicy: "native-default"` mode that runs agent CLIs without passing a model override and records observed runtime model metadata when available.
+Change omitted `model` config to use the underlying agent CLI's native default instead of agent-eval's hardcoded adapter defaults, and record observed runtime model metadata when available.

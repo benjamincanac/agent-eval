@@ -16,8 +16,6 @@ import { getAgent } from './agents/index.js';
  * Default configuration values.
  */
 export const CONFIG_DEFAULTS = {
-  model: 'opus' as const,
-  modelPolicy: 'agent-default' as const,
   evals: '*' as const,
   runs: 1,
   earlyExit: true,
@@ -42,7 +40,6 @@ const experimentConfigSchema = z.object({
     'cursor',
   ]),
   model: z.union([z.string(), z.array(z.string())]).optional(),
-  modelPolicy: z.enum(['agent-default', 'native-default']).optional(),
   evals: z
     .union([z.string(), z.array(z.string()), z.function().args(z.string()).returns(z.boolean())])
     .optional(),
@@ -89,17 +86,10 @@ export function validateConfig(config: unknown): ExperimentConfig {
  */
 export function resolveConfig(config: ExperimentConfig): ResolvedExperimentConfig {
   // Validate agent exists
-  const agent = getAgent(config.agent);
-  const modelPolicy = config.modelPolicy ?? CONFIG_DEFAULTS.modelPolicy;
+  getAgent(config.agent);
 
-  if (modelPolicy === 'native-default' && config.model !== undefined) {
-    throw new Error('model must be omitted when modelPolicy is "native-default"');
-  }
-
-  // Preserve existing behavior unless native-default is explicitly requested.
-  const defaultModel = modelPolicy === 'native-default'
-    ? NATIVE_DEFAULT_MODEL
-    : config.model ?? agent.getDefaultModel();
+  const modelPolicy = config.model === undefined ? 'native-default' : 'agent-default';
+  const defaultModel = config.model ?? NATIVE_DEFAULT_MODEL;
 
   return {
     agent: config.agent,

@@ -22,8 +22,8 @@ export type ModelTier = string;
 
 /**
  * How agent-eval chooses the model for a run.
- * - agent-default: existing behavior; omitted model resolves to the adapter default.
- * - native-default: do not pass a model override; let the underlying CLI choose.
+ * - agent-default: an explicit model was provided and is passed to the adapter.
+ * - native-default: no model was provided; let the underlying CLI choose.
  */
 export type ModelPolicy = 'agent-default' | 'native-default';
 
@@ -98,12 +98,8 @@ export interface ExperimentConfig {
   agent: AgentType;
 
   /** Which AI model the agent should use. Can be a single model or array of models to test.
-   * If an array is provided, the experiment will run on each model.
-   * Default is agent-specific: 'opus' for claude-code, 'openai/gpt-5.2-codex' for codex */
+   * If omitted, the underlying agent CLI chooses its native default model. */
   model?: ModelTier | ModelTier[];
-
-  /** Model selection policy. Defaults to existing agent-eval adapter defaults. */
-  modelPolicy?: ModelPolicy;
 
   /** Which evals to run. Can be a string, array, or filter function. @default '*' (all evals) */
   evals?: string | string[] | EvalFilter;

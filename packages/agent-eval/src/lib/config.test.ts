@@ -43,14 +43,6 @@ describe('validateConfig', () => {
     expect(() => validateConfig(config)).not.toThrow();
   });
 
-  it('accepts native-default model policy', () => {
-    const config = {
-      agent: 'vercel-ai-gateway/claude-code',
-      modelPolicy: 'native-default',
-    };
-    expect(() => validateConfig(config)).not.toThrow();
-  });
-
   it('accepts function evals filter', () => {
     const config = {
       agent: 'claude-code',
@@ -76,26 +68,12 @@ describe('resolveConfig', () => {
     const resolved = resolveConfig(config);
 
     expect(resolved.agent).toBe('claude-code');
-    expect(resolved.model).toBe('opus');
+    expect(resolved.model).toBe('native-default');
     expect(resolved.runs).toBe(CONFIG_DEFAULTS.runs);
     expect(resolved.earlyExit).toBe(CONFIG_DEFAULTS.earlyExit);
     expect(resolved.validation).toBe(CONFIG_DEFAULTS.validation);
     expect(resolved.evals).toBe('*');
-    expect(resolved.modelPolicy).toBe('agent-default');
-  });
-
-  it('preserves native-default policy without resolving an adapter model', () => {
-    const config = { agent: 'vercel-ai-gateway/codex' as const, modelPolicy: 'native-default' as const };
-    const resolved = resolveConfig(config);
-
-    expect(resolved.model).toBe('native-default');
     expect(resolved.modelPolicy).toBe('native-default');
-  });
-
-  it('rejects native-default policy with an explicit model', () => {
-    const config = { agent: 'vercel-ai-gateway/codex' as const, modelPolicy: 'native-default' as const, model: 'openai/gpt-5.2-codex' };
-
-    expect(() => resolveConfig(config)).toThrow('model must be omitted');
   });
 
   it('preserves provided values', () => {
@@ -108,6 +86,7 @@ describe('resolveConfig', () => {
     const resolved = resolveConfig(config);
 
     expect(resolved.model).toBe('haiku');
+    expect(resolved.modelPolicy).toBe('agent-default');
     expect(resolved.runs).toBe(10);
     expect(resolved.earlyExit).toBe(false);
   });
