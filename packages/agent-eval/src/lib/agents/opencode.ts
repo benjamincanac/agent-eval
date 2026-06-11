@@ -70,6 +70,67 @@ export function extractObservedModelFromOpenCodeOutput(output: string): string |
 }
 
 /**
+ * Extract the session id from the `--format json` event stream.
+ * Every emitted event carries a `sessionID` field.
+ */
+export function extractSessionIdFromTranscript(transcript: string | undefined): string | undefined {
+  if (!transcript) {
+    return undefined;
+  }
+
+  for (const line of transcript.split('\n')) {
+    try {
+      const event = JSON.parse(line) as { sessionID?: unknown };
+      if (typeof event.sessionID === 'string' && event.sessionID) {
+        return event.sessionID;
+      }
+    } catch {
+      // Skip non-JSON lines
+    }
+  }
+
+  return undefined;
+}
+
+/**
+ * Extract the observed model from `opencode export <sessionID>` output.
+ * Assistant messages carry `providerID` and `modelID` in their info.
+ */
+export function extractObservedModelFromSessionExport(exportOutput: string): string | undefined {
+  const start = exportOutput.indexOf('{');
+  if (start === -1) {
+    return undefined;
+  }
+
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(exportOutput.slice(start));
+  } catch {
+    return undefined;
+  }
+
+  const messages = (parsed as { messages?: unknown }).messages;
+  if (!Array.isArray(messages)) {
+    return undefined;
+  }
+
+  for (const message of messages) {
+    const info = (message as { info?: { role?: unknown; providerID?: unknown; modelID?: unknown } }).info;
+    if (info?.role !== 'assistant') {
+      continue;
+    }
+    if (
+      typeof info.providerID === 'string' && info.providerID &&
+      typeof info.modelID === 'string' && info.modelID
+    ) {
+      return `${info.providerID}/${info.modelID}`;
+    }
+  }
+
+  return undefined;
+}
+
+/**
  * Additional provider configuration for models not yet available in the
  * default Vercel AI Gateway (e.g., early access / unreleased models).
  */
@@ -254,7 +315,8 @@ export function createOpenCodeAgent(): Agent {
 
         // Run OpenCode CLI using run mode for non-interactive execution.
         // Use --format json for structured output (transcript). Native-default
-        // runs print logs so we can capture the CLI-selected model.
+        // runs also print logs, which lets older OpenCode versions report the
+        // CLI-selected model without a follow-up export call.
         const opencodeArgs = [
           'run',
           options.prompt,
@@ -280,7 +342,27 @@ export function createOpenCodeAgent(): Agent {
 
         agentOutput = opencodeResult.stdout + opencodeResult.stderr;
         transcript = extractTranscriptFromOutput(agentOutput);
-        const observedModel = extractObservedModelFromOpenCodeOutput(agentOutput);
+
+        // Resolve the model OpenCode actually used. The `--format json` events
+        // never include it, so first try scraping the printed logs (works on
+        // OpenCode <= 1.16.x), then fall back to `opencode export <sessionID>`,
+        // whose assistant messages carry providerID/modelID (OpenCode 1.17.0
+        // changed the log format, which broke the scrape). Observation must
+        // never fail the run.
+        let observedModel = extractObservedModelFromOpenCodeOutput(agentOutput);
+        if (!observedModel) {
+          const sessionId = extractSessionIdFromTranscript(transcript);
+          if (sessionId) {
+            try {
+              const exportResult = await sandbox.runCommand('opencode', ['export', sessionId]);
+              if (exportResult.exitCode === 0) {
+                observedModel = extractObservedModelFromSessionExport(exportResult.stdout);
+              }
+            } catch {
+              // Leave observedModel undefined
+            }
+          }
+        }
 
         if (opencodeResult.exitCode !== 0) {
           // Extract meaningful error from output (last few lines usually contain the error)
