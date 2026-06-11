@@ -2,7 +2,9 @@
 "@vercel/agent-eval": minor
 ---
 
-Add an opt-in `webResearch` option to `AgentRunOptions` that enables each agent's web research tools so recommendation evals can produce citation/source data. Default is off: command construction is byte-identical to previous releases for existing consumers.
+Add an opt-in `webResearch` option that enables each agent's web research tools so recommendation evals can produce citation/source data. Default is off: command construction is byte-identical to previous releases for existing consumers.
+
+The option is available on `AgentRunOptions` and on `ExperimentConfig`, and is forwarded by `runExperiment`/`runSingleEval`, so both direct `executeAgent` callers and experiment-config consumers can use it.
 
 When enabled:
 

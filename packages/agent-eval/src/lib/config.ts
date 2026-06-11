@@ -53,6 +53,9 @@ const experimentConfigSchema = z.object({
   editPrompt: z.function().args(z.string()).returns(z.string()).optional(),
   copyFiles: z.enum(['none', 'changed', 'all']).optional(),
   agentOptions: z.record(z.unknown()).optional(),
+  // Must be in the schema: z.object strips unknown keys, so omitting it here
+  // would make validateConfig silently drop the option.
+  webResearch: z.boolean().optional(),
   brands: z.array(z.object({
     id: z.string().optional(),
     name: z.string().min(1),
@@ -106,6 +109,7 @@ export function resolveConfig(config: ExperimentConfig): ResolvedExperimentConfi
     editPrompt: config.editPrompt,
     copyFiles: config.copyFiles ?? CONFIG_DEFAULTS.copyFiles,
     agentOptions: config.agentOptions,
+    webResearch: config.webResearch,
     brands: config.brands,
     onRunComplete: config.onRunComplete,
   };

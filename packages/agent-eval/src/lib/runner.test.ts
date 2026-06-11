@@ -555,7 +555,59 @@ describe('runExperiment', () => {
         signal: expect.any(AbortSignal), // Signal always passed for timeout cleanup
         sandbox: undefined,
         agentOptions: undefined,
+        webResearch: undefined,
       });
+    });
+
+    it('forwards webResearch to agent.run when set', async () => {
+      const mockAgent: Agent = {
+        name: 'mock-agent',
+        displayName: 'Mock Agent',
+        getApiKeyEnvVar: () => 'MOCK_API_KEY',
+        getDefaultModel: () => 'mock-model',
+        run: vi.fn().mockResolvedValue({
+          success: true,
+          output: 'Agent output',
+          duration: 1000,
+          testResult: { success: true, output: 'Test passed' },
+          scriptsResults: {},
+        }),
+      };
+
+      vi.spyOn(agentsIndex, 'getAgent').mockReturnValue(mockAgent);
+
+      const config: ResolvedExperimentConfig = {
+        agent: 'claude-code',
+        model: 'opus',
+        evals: ['test-eval'],
+        runs: 1,
+        earlyExit: false,
+        scripts: [],
+        timeout: 600,
+        webResearch: true,
+      };
+
+      const fixtures: EvalFixture[] = [
+        {
+          name: 'test-eval',
+          path: '/fake/path',
+          prompt: 'Test prompt for agent',
+          isModule: true,
+        },
+      ];
+
+      await runExperiment({
+        config,
+        fixtures,
+        apiKey: 'my-api-key',
+        resultsDir: TEST_DIR,
+        experimentName: 'test-experiment',
+      });
+
+      expect(mockAgent.run).toHaveBeenCalledWith(
+        '/fake/path',
+        expect.objectContaining({ webResearch: true })
+      );
     });
 
     it('does not pass a model override for native-default policy', async () => {
