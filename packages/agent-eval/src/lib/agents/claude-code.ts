@@ -80,13 +80,26 @@ export function extractObservedModelFromClaudeTranscript(transcript: string | un
  * Build the Claude Code CLI argument list.
  *
  * Exported for tests because the argument order is regression-sensitive:
- * `--allowedTools` is variadic, so its tools MUST be passed as a single
- * comma-separated value. Passing them as separate tokens makes the CLI
- * consume the trailing positional prompt as another tool name, which broke
- * every run when #141 used the space-separated form.
+ * `--allowedTools` is variadic — it keeps consuming positional tokens until
+ * the next flag. Two rules follow:
+ *
+ * 1. The tools must be a single comma-separated value (separate tokens broke
+ *    every run in #141).
+ * 2. `--allowedTools` must be followed by another flag, NEVER directly by
+ *    the prompt. The comma token alone is not enough: a live smoke run on
+ *    claude 2.1.112 with `... --allowedTools "WebSearch,WebFetch" <prompt>`
+ *    consumed the prompt as another tool name and failed with "Input must
+ *    be provided either through stdin or as a prompt argument".
+ *
+ * `--allowedTools` is therefore emitted first, and the always-present
+ * `--dangerously-skip-permissions` flag guarantees the variadic capture is
+ * terminated before the trailing positional prompt.
  */
 export function buildClaudeCodeCliArgs(options: AgentRunOptions): string[] {
   const cliArgs = ['--print'];
+  if (options.webResearch) {
+    cliArgs.push('--allowedTools', 'WebSearch,WebFetch');
+  }
   if (options.model) {
     cliArgs.push('--model', options.model);
   }
@@ -94,9 +107,6 @@ export function buildClaudeCodeCliArgs(options: AgentRunOptions): string[] {
   const effort = options.agentOptions?.effort as string | undefined;
   if (effort) {
     cliArgs.push('--effort', effort);
-  }
-  if (options.webResearch) {
-    cliArgs.push('--allowedTools', 'WebSearch,WebFetch');
   }
   cliArgs.push(options.prompt);
   return cliArgs;
