@@ -1,5 +1,11 @@
 # @vercel/agent-eval
 
+## 1.0.1
+
+### Patch Changes
+
+- [#148](https://github.com/vercel-labs/agent-eval/pull/148) [`b4841d6`](https://github.com/vercel-labs/agent-eval/commit/b4841d67910938d004c261960d1e171f19151b57) Thanks [@molebox](https://github.com/molebox)! - Fix OpenCode observed model extraction for OpenCode >= 1.17.0. The log-scrape source (`service=llm ... providerID= modelID=` lines) was removed in OpenCode 1.17.0's logging rewrite, which caused native-default runs to report no observed model. The adapter now falls back to `opencode export <sessionID>`, reading `providerID`/`modelID` from the exported assistant message. The legacy log scrape is kept as the first, cheaper source for older CLI versions.
+
 ## 1.0.0
 
 ### Major Changes
