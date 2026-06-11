@@ -497,5 +497,63 @@ describe('results utilities', () => {
       expect(result.size).toBe(1);
       expect(result.get('eval-1')?.timestamp).toBe('2024-01-26T00-00-00.000Z');
     });
+
+    it('finds results stored under a single-segment model-nested layout', () => {
+      // Legacy layout: results/<exp>/<model>/<ts>/<eval>/summary.json
+      const expDir = join(TEST_DIR, 'my-exp', 'opus', '2024-01-26T12-00-00.000Z', 'eval-1');
+      mkdirSync(expDir, { recursive: true });
+      writeFileSync(
+        join(expDir, 'summary.json'),
+        JSON.stringify({ totalRuns: 2, passedRuns: 1, passRate: '50%', meanDuration: 10, fingerprint: 'abc123' })
+      );
+
+      const result = scanReusableResults(TEST_DIR, 'my-exp', { 'eval-1': 'abc123' });
+      expect(result.size).toBe(1);
+      expect(result.get('eval-1')?.fingerprint).toBe('abc123');
+    });
+
+    it('finds results stored under a provider/model nested layout', () => {
+      // Model with slashes: results/<exp>/anthropic/claude-opus-4.6/<ts>/<eval>/...
+      const expDir = join(
+        TEST_DIR,
+        'my-exp',
+        'anthropic',
+        'claude-opus-4.6',
+        '2024-01-26T12-00-00.000Z',
+        'eval-1'
+      );
+      mkdirSync(expDir, { recursive: true });
+      writeFileSync(
+        join(expDir, 'summary.json'),
+        JSON.stringify({ totalRuns: 2, passedRuns: 1, passRate: '50%', meanDuration: 10, fingerprint: 'abc123' })
+      );
+
+      const result = scanReusableResults(TEST_DIR, 'my-exp', { 'eval-1': 'abc123' });
+      expect(result.size).toBe(1);
+      expect(result.get('eval-1')?.fingerprint).toBe('abc123');
+    });
+
+    it('prefers newest timestamp across mixed canonical and model-nested layouts', () => {
+      // Older result in canonical layout
+      const canonical = join(TEST_DIR, 'my-exp', '2024-01-25T00-00-00.000Z', 'eval-1');
+      mkdirSync(canonical, { recursive: true });
+      writeFileSync(
+        join(canonical, 'summary.json'),
+        JSON.stringify({ totalRuns: 2, passedRuns: 1, passRate: '50%', meanDuration: 10, fingerprint: 'abc123' })
+      );
+
+      // Newer result in model-nested layout
+      const nested = join(TEST_DIR, 'my-exp', 'opus', '2024-01-26T00-00-00.000Z', 'eval-1');
+      mkdirSync(nested, { recursive: true });
+      writeFileSync(
+        join(nested, 'summary.json'),
+        JSON.stringify({ totalRuns: 2, passedRuns: 2, passRate: '100%', meanDuration: 10, fingerprint: 'abc123' })
+      );
+
+      const result = scanReusableResults(TEST_DIR, 'my-exp', { 'eval-1': 'abc123' });
+      expect(result.size).toBe(1);
+      expect(result.get('eval-1')?.timestamp).toBe('2024-01-26T00-00-00.000Z');
+      expect(result.get('eval-1')?.passRate).toBe('100%');
+    });
   });
 });

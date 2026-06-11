@@ -49,7 +49,7 @@ With no arguments, the CLI discovers every `experiments/*.ts` file and runs them
 npx @vercel/agent-eval cc
 ```
 
-The argument is the experiment filename without `.ts`. This resolves to `experiments/cc.ts`.
+The argument is the experiment filename without `.ts`. This resolves to `experiments/cc.ts`. Running a single experiment uses the exact same fingerprinting, result storage, and reuse logic as running all of them — it's just run-all filtered to one name. So results produced by `agent-eval cc` are reused on the next `agent-eval` (run-all), and vice versa.
 
 ### Flags
 
@@ -57,7 +57,7 @@ The argument is the experiment filename without `.ts`. This resolves to `experim
 |----------------------|--------------------------------------------------------------------------------------------|
 | `--dry`              | Preview what would run without executing. No API calls, no cost.                           |
 | `--smoke`            | Quick setup verification. Picks the first eval alphabetically, runs once per model.        |
-| `--force`            | Ignore cached fingerprints and re-run everything. Only applies when running all.           |
+| `--force`            | Ignore cached fingerprints and re-run everything.                                          |
 | `--ack-failures`     | Keep non-model failures as final results instead of deleting them.                         |
 
 Flags work with both modes:
@@ -478,6 +478,8 @@ On subsequent runs, evals with a matching fingerprint and a valid cached result 
 - **Changing the `evals` filter** -- safe, the filter is not part of the fingerprint.
 - **Editing an eval file** -- only invalidates that specific eval.
 - **Changing config fields** (agent, model, timeout, etc.) -- invalidates all evals in that experiment.
+
+Reuse works regardless of how results were stored on disk: both the single-model layout (`results/<experiment>/<timestamp>/`) and the model-nested layout (`results/<experiment>/<model>/<timestamp>/`) are scanned, so legacy results are picked up without a manual backfill.
 
 Use `--force` to bypass fingerprinting and re-run everything. Functions like `setup` and `editPrompt` cannot be hashed, so use `--force` when you change those.
 

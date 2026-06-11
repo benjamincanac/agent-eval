@@ -473,6 +473,55 @@ export interface ReusableResult {
 }
 
 /**
+ * Matches a results timestamp directory, e.g. "2024-01-26T12-00-00.000Z".
+ */
+const TIMESTAMP_DIR_RE = /^\d{4}-\d{2}-\d{2}T/;
+
+/**
+ * Collect all timestamp directories under an experiment root.
+ *
+ * Handles two storage layouts:
+ * - `results/<experiment>/<ts>/`         (single-model / canonical)
+ * - `results/<experiment>/<model>/<ts>/` (model-nested, where <model> may
+ *   itself contain slashes, e.g. `anthropic/claude-opus-4.6`)
+ *
+ * Timestamp dirs are detected by name; any other directory is treated as a
+ * model segment and recursed into (up to maxDepth) so reuse works regardless
+ * of which layout produced the result.
+ */
+function collectTimestampDirs(
+	root: string,
+	maxDepth = 4,
+	depth = 0,
+): Array<{ path: string; timestamp: string }> {
+	let entries: string[];
+	try {
+		entries = readdirSync(root).filter((e) => !e.startsWith('.'));
+	} catch {
+		return [];
+	}
+
+	const found: Array<{ path: string; timestamp: string }> = [];
+	for (const entry of entries) {
+		const fullPath = join(root, entry);
+		try {
+			if (!statSync(fullPath).isDirectory()) continue;
+		} catch {
+			continue;
+		}
+
+		if (TIMESTAMP_DIR_RE.test(entry)) {
+			found.push({ path: fullPath, timestamp: entry });
+		} else if (depth < maxDepth) {
+			// Likely a model segment dir — recurse to find nested timestamps.
+			found.push(...collectTimestampDirs(fullPath, maxDepth, depth + 1));
+		}
+	}
+
+	return found;
+}
+
+/**
  * Scan existing results for an experiment to find reusable eval results.
  *
  * A result is reusable if:
@@ -481,6 +530,8 @@ export interface ReusableResult {
  * 3. It has passedRuns > 0 (successful result worth reusing)
  *
  * Scans all timestamps newest-first and returns the latest match per eval.
+ * Both the canonical `<experiment>/<ts>/` layout and the legacy model-nested
+ * `<experiment>/<model>/<ts>/` layout are supported.
  */
 export function scanReusableResults(
 	resultsDir: string,
@@ -492,21 +543,12 @@ export function scanReusableResults(
 
 	if (!existsSync(experimentDir)) return reusable;
 
-	// Get all timestamps, sorted newest first
-	let timestamps: string[];
-	try {
-		timestamps = readdirSync(experimentDir)
-			.filter((t) => !t.startsWith('.'))
-			.sort()
-			.reverse();
-	} catch {
-		return reusable;
-	}
+	// Collect timestamp dirs across both layouts, sorted newest first.
+	const timestampDirs = collectTimestampDirs(experimentDir).sort((a, b) =>
+		b.timestamp.localeCompare(a.timestamp),
+	);
 
-	for (const timestamp of timestamps) {
-		const tsDir = join(experimentDir, timestamp);
-		if (!statSync(tsDir).isDirectory()) continue;
-
+	for (const { path: tsDir, timestamp } of timestampDirs) {
 		let evalDirs: string[];
 		try {
 			evalDirs = readdirSync(tsDir).filter((d) => !d.startsWith('.'));
