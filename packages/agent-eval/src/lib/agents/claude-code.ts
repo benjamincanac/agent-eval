@@ -77,6 +77,32 @@ export function extractObservedModelFromClaudeTranscript(transcript: string | un
 }
 
 /**
+ * Build the Claude Code CLI argument list.
+ *
+ * Exported for tests because the argument order is regression-sensitive:
+ * `--allowedTools` is variadic, so its tools MUST be passed as a single
+ * comma-separated value. Passing them as separate tokens makes the CLI
+ * consume the trailing positional prompt as another tool name, which broke
+ * every run when #141 used the space-separated form.
+ */
+export function buildClaudeCodeCliArgs(options: AgentRunOptions): string[] {
+  const cliArgs = ['--print'];
+  if (options.model) {
+    cliArgs.push('--model', options.model);
+  }
+  cliArgs.push('--dangerously-skip-permissions');
+  const effort = options.agentOptions?.effort as string | undefined;
+  if (effort) {
+    cliArgs.push('--effort', effort);
+  }
+  if (options.webResearch) {
+    cliArgs.push('--allowedTools', 'WebSearch,WebFetch');
+  }
+  cliArgs.push(options.prompt);
+  return cliArgs;
+}
+
+/**
  * Create Claude Code agent with specified authentication method.
  */
 export function createClaudeCodeAgent({ useVercelAiGateway }: { useVercelAiGateway: boolean }): Agent {
@@ -221,16 +247,7 @@ export function createClaudeCodeAgent({ useVercelAiGateway }: { useVercelAiGatew
       }
 
       // Build CLI arguments
-      const cliArgs = ['--print'];
-      if (options.model) {
-        cliArgs.push('--model', options.model);
-      }
-      cliArgs.push('--dangerously-skip-permissions');
-      const effort = options.agentOptions?.effort as string | undefined;
-      if (effort) {
-        cliArgs.push('--effort', effort);
-      }
-      cliArgs.push(options.prompt);
+      const cliArgs = buildClaudeCodeCliArgs(options);
 
       // Run Claude Code with appropriate authentication
       const claudeResult = await sandbox.runCommand(

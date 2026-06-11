@@ -28,6 +28,22 @@ export interface AgentRunOptions {
   signal?: AbortSignal;
   /** Sandbox backend to use */
   sandbox?: SandboxBackend | 'auto';
+  /**
+   * Enable each agent's web research tools so answers can produce
+   * citation/source data. Default false: command construction is unchanged
+   * for existing consumers (coding evals do not want web tools silently
+   * enabled).
+   *
+   * When true:
+   * - Claude Code: allows `WebSearch` and `WebFetch` via a single
+   *   comma-separated `--allowedTools` value. The flag is variadic, so the
+   *   tools MUST be one comma-separated token — separate tokens swallow the
+   *   trailing positional prompt (the #141 regression).
+   * - Codex: sets `tools.web_search = true` in the generated profile config.
+   * - OpenCode: sets `OPENCODE_ENABLE_EXA=1` and allows the
+   *   `websearch`/`webfetch` tools.
+   */
+  webResearch?: boolean;
   /** Agent-specific options (e.g., binaryUrl, extraProviders for opencode) */
   agentOptions?: Record<string, unknown>;
 }

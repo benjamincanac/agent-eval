@@ -3,7 +3,32 @@ import {
   extractObservedModelFromOpenCodeOutput,
   extractObservedModelFromSessionExport,
   extractSessionIdFromTranscript,
+  generateOpenCodeConfig,
 } from './opencode.js';
+
+describe('generateOpenCodeConfig', () => {
+  it('grants only the default tool permissions when webResearch is off', () => {
+    const config = JSON.parse(generateOpenCodeConfig(undefined, 'test-key'));
+    expect(config.permission).toEqual({ write: 'allow', edit: 'allow', bash: 'allow' });
+  });
+
+  it('allows websearch and webfetch when webResearch is set', () => {
+    const config = JSON.parse(generateOpenCodeConfig(undefined, 'test-key', undefined, true));
+    expect(config.permission).toEqual({
+      write: 'allow',
+      edit: 'allow',
+      bash: 'allow',
+      webfetch: 'allow',
+      websearch: 'allow',
+    });
+  });
+
+  it('keeps provider configuration unchanged when webResearch is set', () => {
+    const withResearch = JSON.parse(generateOpenCodeConfig(undefined, 'test-key', undefined, true));
+    const without = JSON.parse(generateOpenCodeConfig(undefined, 'test-key'));
+    expect(withResearch.provider).toEqual(without.provider);
+  });
+});
 
 describe('OpenCode observed model extraction', () => {
   it('extracts the primary build model from printed logs', () => {
