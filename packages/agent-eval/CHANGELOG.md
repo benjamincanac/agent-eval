@@ -1,5 +1,19 @@
 # @vercel/agent-eval
 
+## 1.1.0
+
+### Minor Changes
+
+- [#150](https://github.com/vercel-labs/agent-eval/pull/150) [`084d895`](https://github.com/vercel-labs/agent-eval/commit/084d895f664f4467f577abe91d9238e23b41ad57) Thanks [@molebox](https://github.com/molebox)! - Add an opt-in `webResearch` option that enables each agent's web research tools so recommendation evals can produce citation/source data. Default is off: command construction is byte-identical to previous releases for existing consumers.
+
+  The option is available on `AgentRunOptions` and on `ExperimentConfig`, and is forwarded by `runExperiment`/`runSingleEval`, so both direct `executeAgent` callers and experiment-config consumers can use it.
+
+  When enabled:
+
+  - Claude Code: allows `WebSearch` and `WebFetch` via a single comma-separated `--allowedTools` value (the flag is variadic — the space-separated form in #141 consumed the trailing positional prompt as a tool name, which is what broke all CLI evals and forced the #144 revert).
+  - Codex: sets `tools.web_search = true` in the generated profile config.
+  - OpenCode: sets `OPENCODE_ENABLE_EXA=1` and allows the `websearch`/`webfetch` tools.
+
 ## 1.0.1
 
 ### Patch Changes
