@@ -1,5 +1,11 @@
 # @vercel/agent-eval
 
+## 1.1.1
+
+### Patch Changes
+
+- [#152](https://github.com/vercel-labs/agent-eval/pull/152) [`c016ea0`](https://github.com/vercel-labs/agent-eval/commit/c016ea0319c2c22bbe515ff9647b8e6e64b4be07) Thanks [@molebox](https://github.com/molebox)! - Fix Claude Code prompt being consumed by `--allowedTools` when `webResearch` is enabled. The flag is variadic and keeps capturing positionals until the next flag, so even the single comma-separated token from 1.1.0 swallowed the trailing prompt ("Input must be provided either through stdin or as a prompt argument when using --print", verified live on claude 2.1.112). `--allowedTools` is now emitted before the always-present `--dangerously-skip-permissions`, which terminates the variadic capture before the prompt. Default-off argument construction is unchanged.
+
 ## 1.1.0
 
 ### Minor Changes
