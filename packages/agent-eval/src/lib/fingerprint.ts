@@ -22,6 +22,7 @@ interface FingerprintableConfig {
   timeout: number;
   earlyExit: boolean;
   runs: number;
+  webResearch?: boolean;
 }
 
 /**
@@ -76,6 +77,13 @@ export function computeFingerprint(evalPath: string, config: RunnableExperimentC
   };
   if (config.modelPolicy === 'native-default') {
     configForHash.modelPolicy = config.modelPolicy;
+  }
+  // Included only when enabled so existing (default-off) fingerprints are
+  // unchanged, while research and non-research configs never share a
+  // fingerprint — result reuse must not serve a cached parametric-only
+  // result for a research run, or vice versa.
+  if (config.webResearch) {
+    configForHash.webResearch = true;
   }
   hash.update(`config:${JSON.stringify(configForHash)}`);
 
