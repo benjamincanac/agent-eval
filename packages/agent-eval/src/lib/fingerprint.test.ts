@@ -106,6 +106,34 @@ describe('computeFingerprint', () => {
     expect(fp1).not.toBe(fp2);
   });
 
+  it('keeps webResearch-off equivalent to existing fingerprints', () => {
+    const evalDir = createEvalDir('eval-research-default', {
+      'PROMPT.md': 'Do something',
+      'EVAL.ts': 'test code',
+      'package.json': '{"type":"module"}',
+    });
+
+    const fp1 = computeFingerprint(evalDir, baseConfig);
+    const fp2 = computeFingerprint(evalDir, { ...baseConfig, webResearch: false });
+    const fp3 = computeFingerprint(evalDir, { ...baseConfig, webResearch: undefined });
+
+    expect(fp1).toBe(fp2);
+    expect(fp1).toBe(fp3);
+  });
+
+  it('changes when webResearch is enabled (research results must not be reused for parametric runs)', () => {
+    const evalDir = createEvalDir('eval-research-on', {
+      'PROMPT.md': 'Do something',
+      'EVAL.ts': 'test code',
+      'package.json': '{"type":"module"}',
+    });
+
+    const fp1 = computeFingerprint(evalDir, baseConfig);
+    const fp2 = computeFingerprint(evalDir, { ...baseConfig, webResearch: true });
+
+    expect(fp1).not.toBe(fp2);
+  });
+
   it('changes when config timeout changes', () => {
     const evalDir = createEvalDir('eval-4', {
       'PROMPT.md': 'Do something',

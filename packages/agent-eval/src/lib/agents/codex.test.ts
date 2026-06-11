@@ -74,6 +74,24 @@ describe('generateCodexConfig', () => {
     expect(config).not.toContain('model_reasoning_effort');
     expect(config).not.toContain('model_verbosity');
   });
+
+  it('omits the tools section by default', () => {
+    expect(generateCodexConfig(undefined, true)).not.toContain('[tools]');
+    expect(generateCodexConfig(undefined, false)).not.toContain('[tools]');
+  });
+
+  it('enables web_search when webResearch is set', () => {
+    const gatewayConfig = generateCodexConfig(undefined, true, undefined, true);
+    expect(gatewayConfig).toContain('[tools]');
+    expect(gatewayConfig).toContain('web_search = true');
+    // The tools table must come after the provider table's keys so the
+    // provider settings are not absorbed into [tools].
+    expect(gatewayConfig.indexOf('[tools]')).toBeGreaterThan(gatewayConfig.indexOf('wire_api'));
+
+    const directConfig = generateCodexConfig(undefined, false, undefined, true);
+    expect(directConfig).toContain('[tools]');
+    expect(directConfig).toContain('web_search = true');
+  });
 });
 
 describe('Codex observed model extraction', () => {

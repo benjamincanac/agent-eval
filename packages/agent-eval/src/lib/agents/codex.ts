@@ -163,7 +163,14 @@ export function generateCodexConfig(
   model: string | undefined,
   useVercelAiGateway: boolean,
   reasoningEffort?: string,
+  webResearch?: boolean,
 ): string {
+  // Opt-in web research. Note: through the AI Gateway (`wire_api =
+  // "responses"`), no `web_search` items have been observed — Codex instead
+  // researches via shell commands when it decides to. The setting is still
+  // written so direct-OpenAI runs and future gateway support pick it up; it
+  // is harmless when the server-side tool is unavailable.
+  const toolsSection = webResearch ? `\n[tools]\nweb_search = true\n` : '';
   if (useVercelAiGateway) {
     // AI Gateway uses prefixed model names like "openai/gpt-5.2-codex".
     // Native-default runs intentionally omit model and reasoning overrides.
@@ -176,14 +183,14 @@ name = "Vercel AI Gateway"
 base_url = "${AI_GATEWAY.openAiBaseUrl}"
 env_key = "${AI_GATEWAY.apiKeyEnvVar}"
 wire_api = "responses"
-`;
+${toolsSection}`;
   } else {
     // Direct OpenAI API — use the built-in "openai" provider (no custom provider needed).
     // Native-default runs intentionally omit model and reasoning overrides.
     const directModel = model ? (model.includes('/') ? model.split('/').pop()! : model) : undefined;
     return `# Direct OpenAI API configuration
 model_provider = "openai"
-${directModel ? `model = "${directModel}"\n` : ''}${model ? `model_reasoning_effort = "${reasoningEffort ?? DEFAULT_REASONING_EFFORT}"\nmodel_verbosity = "${DEFAULT_MODEL_VERBOSITY}"\n` : ''}`;
+${directModel ? `model = "${directModel}"\n` : ''}${model ? `model_reasoning_effort = "${reasoningEffort ?? DEFAULT_REASONING_EFFORT}"\nmodel_verbosity = "${DEFAULT_MODEL_VERBOSITY}"\n` : ''}${toolsSection}`;
   }
 }
 
@@ -309,7 +316,7 @@ export function createCodexAgent({ useVercelAiGateway }: { useVercelAiGateway: b
       // and so the CLI's own default of "low" can't sneak through. For
       // native-default runs we omit these settings to match the CLI's behavior.
       await sandbox.runShell('mkdir -p ~/.codex');
-      const configContent = generateCodexConfig(baseModel, useVercelAiGateway, reasoningEffort);
+      const configContent = generateCodexConfig(baseModel, useVercelAiGateway, reasoningEffort, options.webResearch);
       await sandbox.runShell(`cat > ~/.codex/default.config.toml << 'EOF'
 ${configContent}
 EOF`);

@@ -151,7 +151,7 @@ export interface OpenCodeProviderConfig {
  * Generate OpenCode config file content.
  * Configures the Vercel AI Gateway provider, plus any additional providers.
  */
-function generateOpenCodeConfig(extraProviders?: Record<string, OpenCodeProviderConfig>, apiKey?: string, timeoutMs?: number): string {
+export function generateOpenCodeConfig(extraProviders?: Record<string, OpenCodeProviderConfig>, apiKey?: string, timeoutMs?: number, webResearch?: boolean): string {
   const vercelBase: Record<string, unknown> = {
     options: {
       apiKey: apiKey || '{env:AI_GATEWAY_API_KEY}',
@@ -176,6 +176,9 @@ function generateOpenCodeConfig(extraProviders?: Record<string, OpenCodeProvider
       write: 'allow',
       edit: 'allow',
       bash: 'allow',
+      // OpenCode has no native web search; Exa-backed search is enabled via
+      // OPENCODE_ENABLE_EXA=1 alongside these tool permissions.
+      ...(webResearch ? { webfetch: 'allow', websearch: 'allow' } : {}),
     },
   }, null, 2);
 }
@@ -305,7 +308,7 @@ export function createOpenCodeAgent(): Agent {
         }
 
         // Create OpenCode config file in the project directory
-        const configContent = generateOpenCodeConfig(extraProviders, options.apiKey, options.timeout);
+        const configContent = generateOpenCodeConfig(extraProviders, options.apiKey, options.timeout, options.webResearch);
         await sandbox.writeFiles({
           'opencode.json': configContent,
         });
@@ -335,6 +338,10 @@ export function createOpenCodeAgent(): Agent {
           {
             env: {
               [AI_GATEWAY.apiKeyEnvVar]: options.apiKey,
+              // Exa-backed websearch is gated behind this env var in the
+              // OpenCode CLI; the matching tool permissions are written into
+              // opencode.json by generateOpenCodeConfig.
+              ...(options.webResearch ? { OPENCODE_ENABLE_EXA: '1' } : {}),
               ...neutralWorkspace.env,
             },
           }

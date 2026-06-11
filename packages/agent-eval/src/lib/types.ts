@@ -139,6 +139,11 @@ export interface ExperimentConfig {
    * These are forwarded to the agent's run() method. @default undefined */
   agentOptions?: Record<string, unknown>;
 
+  /** Enable each agent's web research tools (see `AgentRunOptions.webResearch`
+   * for the per-agent mechanics). Forwarded to the agent's run() method.
+   * @default false — command construction is unchanged when omitted. */
+  webResearch?: boolean;
+
   /** Brands to track or compare in downstream analysis. @default undefined */
   brands?: BrandConfig[];
 
@@ -164,6 +169,7 @@ export interface ResolvedExperimentConfig {
   editPrompt?: (prompt: string) => string;
   copyFiles: 'none' | 'changed' | 'all';
   agentOptions?: Record<string, unknown>;
+  webResearch?: boolean;
   brands?: BrandConfig[];
   onRunComplete?: RunCompleteHook;
 }
@@ -186,6 +192,7 @@ export interface RunnableExperimentConfig {
   editPrompt?: (prompt: string) => string;
   copyFiles: 'none' | 'changed' | 'all';
   agentOptions?: Record<string, unknown>;
+  webResearch?: boolean;
   brands?: BrandConfig[];
   onRunComplete?: RunCompleteHook;
 }

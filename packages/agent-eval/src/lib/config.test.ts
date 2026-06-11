@@ -60,6 +60,16 @@ describe('validateConfig', () => {
     const config = { agent: 'claude-code', runs: 0 };
     expect(() => validateConfig(config)).toThrow('Invalid experiment configuration');
   });
+
+  it('keeps webResearch through validation (zod strips unknown keys)', () => {
+    const config = { agent: 'claude-code', webResearch: true };
+    expect(validateConfig(config).webResearch).toBe(true);
+  });
+
+  it('rejects non-boolean webResearch', () => {
+    const config = { agent: 'claude-code', webResearch: 'yes' };
+    expect(() => validateConfig(config)).toThrow('Invalid experiment configuration');
+  });
 });
 
 describe('resolveConfig', () => {
@@ -89,6 +99,11 @@ describe('resolveConfig', () => {
     expect(resolved.modelPolicy).toBe('agent-default');
     expect(resolved.runs).toBe(10);
     expect(resolved.earlyExit).toBe(false);
+  });
+
+  it('passes webResearch through and leaves it undefined by default', () => {
+    expect(resolveConfig({ agent: 'claude-code' as const }).webResearch).toBeUndefined();
+    expect(resolveConfig({ agent: 'claude-code' as const, webResearch: true }).webResearch).toBe(true);
   });
 
 });
