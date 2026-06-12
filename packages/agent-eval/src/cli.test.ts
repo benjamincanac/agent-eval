@@ -14,14 +14,20 @@ const CLI_PATH = resolve(PROJECT_ROOT, 'src/cli.ts');
 
 const TEST_DIR = '/tmp/eval-framework-cli-test';
 
-function runCli(args: string[], cwd?: string): { stdout: string; stderr: string; exitCode: number } {
+function runCli(
+  args: string[],
+  cwd?: string,
+  env?: NodeJS.ProcessEnv
+): { stdout: string; stderr: string; exitCode: number } {
   const result = spawnSync('npx', ['tsx', CLI_PATH, ...args], {
     cwd: cwd ?? PROJECT_ROOT,
     encoding: 'utf-8',
+    env: env ?? process.env,
   });
   return {
     stdout: result.stdout ?? '',
-    stderr: result.stderr ?? '',
+    // Surface spawn failures (e.g. npx missing) instead of an empty stderr.
+    stderr: (result.stderr ?? '') + (result.error ? `\n${result.error.message}` : ''),
     exitCode: result.status ?? 1,
   };
 }
@@ -49,7 +55,7 @@ describe('CLI', () => {
   // Helper to scaffold a project/experiments + project/evals layout.
   function scaffoldProject(
     name: string,
-    options: { configContent?: string; evals?: string[] } = {}
+    options: { configContent?: string; evals?: string[]; omitEvalFile?: boolean } = {}
   ): { projectDir: string; experimentsDir: string; evalsDir: string } {
     const projectDir = join(TEST_DIR, name);
     const experimentsDir = join(projectDir, 'experiments');
@@ -64,7 +70,9 @@ describe('CLI', () => {
       const fixture = join(evalsDir, evalName);
       mkdirSync(fixture);
       writeFileSync(join(fixture, 'PROMPT.md'), 'Test task');
-      writeFileSync(join(fixture, 'EVAL.ts'), 'test code');
+      if (!options.omitEvalFile) {
+        writeFileSync(join(fixture, 'EVAL.ts'), 'test code');
+      }
       writeFileSync(join(fixture, 'package.json'), JSON.stringify({ type: 'module' }));
     }
 
@@ -110,8 +118,9 @@ describe('CLI', () => {
       expect(result.exitCode).toBe(1);
     });
 
-    it('surfaces invalid config errors', () => {
-      // Missing agent -> config validation fails.
+    it('surfaces invalid config errors and exits non-zero for a named experiment', () => {
+      // Missing agent -> config validation fails. An explicitly named
+      // experiment that cannot load must not exit 0 (silent pass in CI).
       const { projectDir } = scaffoldProject('bad-config', {
         configContent: `export default { model: 'opus' };`,
         evals: ['my-eval'],
@@ -120,6 +129,42 @@ describe('CLI', () => {
       const result = runCli(['cc', '--dry'], projectDir);
       expect(result.stderr).toContain('Failed to load');
       expect(result.stderr).toContain('agent');
+      expect(result.exitCode).toBe(1);
+    });
+
+    it('exits non-zero when a named experiment is skipped for a missing API key', () => {
+      const { projectDir } = scaffoldProject('no-key-project', { evals: ['my-eval'] });
+
+      // Blank out every credential the key check accepts so the run is
+      // skipped before any sandbox work happens.
+      const result = runCli(['cc'], projectDir, {
+        ...process.env,
+        AI_GATEWAY_API_KEY: '',
+        ANTHROPIC_API_KEY: '',
+        VERCEL_OIDC_TOKEN: '',
+      });
+      expect(result.stderr).toContain('not set');
+      expect(result.exitCode).toBe(1);
+    });
+
+    it('accepts path-style arguments like experiments/cc.ts (dry run)', () => {
+      const { projectDir } = scaffoldProject('path-style-project', { evals: ['my-eval'] });
+
+      const result = runCli(['experiments/cc.ts', '--dry'], projectDir);
+      expect(result.stdout).toContain('my-eval');
+      expect(result.exitCode).toBe(0);
+    });
+
+    it('honors validation: none (evals without EVAL.ts are discovered)', () => {
+      const { projectDir } = scaffoldProject('no-validation-project', {
+        configContent: `export default { agent: 'claude-code', validation: 'none' };`,
+        evals: ['my-eval'],
+        omitEvalFile: true,
+      });
+
+      const result = runCli(['cc', '--dry'], projectDir);
+      expect(result.stdout).toContain('my-eval');
+      expect(result.exitCode).toBe(0);
     });
 
     it('reuses just-passed results: `<name>` then `run-all <name> --dry` reports cached', async () => {
@@ -128,14 +173,14 @@ describe('CLI', () => {
       });
 
       // Simulate a passed result stored at the canonical single-model layout
-      // (results/<name>/<ts>/<eval>/summary.json) with a matching fingerprint,
-      // exactly as the unified run path would produce.
+      // (results/<name>/<ts>/<eval>/summary.json) with a matching fingerprint.
+      // The naming and fingerprint construction here must mirror what
+      // runAllCommand in cli.ts does for each model.
       const config = await loadConfig(join(experimentsDir, 'cc.ts'));
       const models = Array.isArray(config.model) ? config.model : [config.model];
       const model = models[0];
       const experimentName = models.length > 1 ? `cc/${model}` : 'cc';
-      const modelConfig = { ...config, model, runs: config.runs };
-      const fingerprint = computeFingerprint(join(evalsDir, 'my-eval'), modelConfig);
+      const fingerprint = computeFingerprint(join(evalsDir, 'my-eval'), { ...config, model });
 
       const evalDir = join(projectDir, 'results', experimentName, '2024-01-26T12-00-00.000Z', 'my-eval');
       mkdirSync(evalDir, { recursive: true });

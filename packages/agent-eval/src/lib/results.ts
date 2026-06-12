@@ -487,7 +487,13 @@ const TIMESTAMP_DIR_RE = /^\d{4}-\d{2}-\d{2}T/;
  *
  * Timestamp dirs are detected by name; any other directory is treated as a
  * model segment and recursed into (up to maxDepth) so reuse works regardless
- * of which layout produced the result.
+ * of which layout produced the result. maxDepth of 4 covers `provider/model`
+ * segments (depth 2) with headroom; it exists only to bound the walk on
+ * unexpected directory shapes.
+ *
+ * Note the deliberate asymmetry with housekeeping: legacy model-nested dirs
+ * are read for reuse here, but `housekeep` only manages the canonical layout
+ * and never cleans them.
  */
 function collectTimestampDirs(
 	root: string,

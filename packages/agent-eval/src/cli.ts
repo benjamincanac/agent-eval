@@ -6,7 +6,7 @@
 
 import { Command } from 'commander';
 import { config as dotenvConfig } from 'dotenv';
-import { resolve, dirname } from 'path';
+import { resolve, dirname, basename } from 'path';
 import { existsSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'fs';
 import { fileURLToPath } from 'url';
 import chalk from 'chalk';
@@ -14,7 +14,7 @@ import { loadConfig, resolveEvalNames } from './lib/config.js';
 import { loadAllFixtures } from './lib/fixture.js';
 import { runExperiment, StartRateLimiter } from './lib/runner.js';
 import { Dashboard, createConsoleProgressHandler } from './lib/dashboard.js';
-import type { ProgressEvent, Classification } from './lib/types.js';
+import type { ProgressEvent, Classification, ResolvedExperimentConfig, EvalFixture } from './lib/types.js';
 import { initProject, getPostInitInstructions } from './lib/init.js';
 import { getAgent } from './lib/agents/index.js';
 import { computeFingerprint } from './lib/fingerprint.js';
@@ -107,6 +107,62 @@ program
   });
 
 /**
+ * Normalize an experiment argument to a bare experiment name.
+ * Accepts "cc", "cc*" (glob), and path-style "experiments/cc.ts".
+ */
+function normalizeExperimentArg(arg: string): string {
+  return basename(arg).replace(/\.(ts|js)$/, '');
+}
+
+type ExperimentPlan =
+  | { ok: true; config: ResolvedExperimentConfig; fixtures: EvalFixture[]; evalNames: string[] }
+  | { ok: false; reason: 'config' | 'fixtures' };
+
+/**
+ * Load an experiment config and the eval fixtures visible to it. Fixtures are
+ * loaded per experiment because validation is a config field (`validation:
+ * 'none'` makes EVAL.ts optional). Logs and returns `ok: false` on failure;
+ * the caller decides how that affects the exit code.
+ */
+async function loadExperimentPlan(
+  file: string,
+  experimentsDir: string,
+  evalsDir: string,
+  smoke: boolean | undefined,
+): Promise<ExperimentPlan> {
+  let config: ResolvedExperimentConfig;
+  try {
+    config = await loadConfig(resolve(experimentsDir, file));
+  } catch (err) {
+    console.error(chalk.red(`Failed to load ${file}: ${err instanceof Error ? err.message : err}`));
+    return { ok: false, reason: 'config' };
+  }
+
+  const { fixtures, errors } = loadAllFixtures(evalsDir, { validation: config.validation });
+  if (errors.length > 0) {
+    console.log(chalk.yellow(`Warning: ${errors.length} invalid fixture(s) for ${file}`));
+  }
+  if (fixtures.length === 0) {
+    console.error(chalk.red(`No valid eval fixtures found for ${file}`));
+    return { ok: false, reason: 'fixtures' };
+  }
+
+  const availableNames = fixtures.map((f) => f.name);
+  let evalNames: string[];
+  try {
+    evalNames = resolveEvalNames(config.evals, availableNames);
+  } catch {
+    evalNames = availableNames;
+  }
+
+  if (smoke) {
+    evalNames = [evalNames.sort()[0]];
+  }
+
+  return { ok: true, config, fixtures, evalNames };
+}
+
+/**
  * Run-all handler: discover and run all experiments with fingerprint reuse
  * and classification. Used by both `run-all` subcommand and the default
  * (no-args) invocation.
@@ -132,12 +188,16 @@ async function runAllCommand(experimentArgs: string[], options: { dry?: boolean;
         .filter((f) => f.endsWith('.ts') && !f.startsWith('_temp_'))
         .sort();
 
-      // Filter by args if provided
+      // Filter by args if provided. Experiments named explicitly must be
+      // runnable: failures to load or skips fail the exit code, where a
+      // no-args sweep just runs whatever it can.
+      const explicit = experimentArgs.length > 0;
       let selectedFiles: string[];
-      if (experimentArgs.length > 0) {
+      if (explicit) {
+        const wantedNames = experimentArgs.map(normalizeExperimentArg);
         selectedFiles = allExperimentFiles.filter((f) => {
           const name = f.replace(/\.ts$/, '');
-          return experimentArgs.some((arg) =>
+          return wantedNames.some((arg) =>
             arg.includes('*') ? minimatch(name, arg) : name === arg
           );
         });
@@ -155,45 +215,23 @@ async function runAllCommand(experimentArgs: string[], options: { dry?: boolean;
         console.log(chalk.blue(`  - ${f.replace(/\.ts$/, '')}`));
       }
 
-      // Load all fixtures
-      const { fixtures, errors } = loadAllFixtures(evalsDir);
-      if (errors.length > 0) {
-        console.log(chalk.yellow(`\nWarning: ${errors.length} invalid fixture(s)`));
-      }
-      if (fixtures.length === 0) {
-        console.error(chalk.red('No valid eval fixtures found'));
-        process.exit(1);
-      }
-
       // --- Dry run: collect info and print a single summary table ---
       if (options.dry) {
         interface DryRunInfo { name: string; toRun: string[]; cached: number; total: number }
         const dryResults: DryRunInfo[] = [];
+        let hadErrors = false;
 
         for (const file of selectedFiles) {
-          const configPath = resolve(experimentsDir, file);
           const baseExperimentName = file.replace(/\.ts$/, '');
 
-          let config;
-          try {
-            config = await loadConfig(configPath);
-          } catch (err) {
-            console.error(chalk.red(`Failed to load ${file}: ${err instanceof Error ? err.message : err}`));
+          const plan = await loadExperimentPlan(file, experimentsDir, evalsDir, options.smoke);
+          if (!plan.ok) {
+            if (explicit || plan.reason === 'fixtures') hadErrors = true;
             continue;
           }
+          const { config, fixtures, evalNames } = plan;
 
           const models = Array.isArray(config.model) ? config.model : [config.model];
-          const availableNames = fixtures.map((f) => f.name);
-          let evalNames: string[];
-          try {
-            evalNames = resolveEvalNames(config.evals, availableNames);
-          } catch {
-            evalNames = availableNames;
-          }
-
-          if (options.smoke) {
-            evalNames = [evalNames.sort()[0]];
-          }
 
           for (const model of models) {
             const experimentName = models.length > 1
@@ -227,12 +265,14 @@ async function runAllCommand(experimentArgs: string[], options: { dry?: boolean;
         // Print summary
         const totalToRun = dryResults.reduce((sum, d) => sum + d.toRun.length, 0);
         const totalCached = dryResults.reduce((sum, d) => sum + d.cached, 0);
-        const nameWidth = Math.max(...dryResults.map((d) => d.name.length)) + 2;
 
         console.log('');
-        if (totalToRun === 0) {
+        if (dryResults.length === 0) {
+          // Nothing loadable; errors were already printed above.
+        } else if (totalToRun === 0) {
           console.log(chalk.green(`  All ${totalCached} evals cached across ${dryResults.length} experiments. Nothing to run.`));
         } else {
+          const nameWidth = Math.max(...dryResults.map((d) => d.name.length)) + 2;
           console.log(chalk.bold(`  ${totalToRun} evals to run, ${totalCached} cached\n`));
           for (const d of dryResults) {
             const label = d.name.padEnd(nameWidth);
@@ -251,7 +291,7 @@ async function runAllCommand(experimentArgs: string[], options: { dry?: boolean;
           }
         }
         console.log('');
-        return;
+        process.exit(hadErrors ? 1 : 0);
       }
 
       // --- Live run ---
@@ -279,35 +319,23 @@ async function runAllCommand(experimentArgs: string[], options: { dry?: boolean;
 
       let allPassed = true;
       const experimentPromises = selectedFiles.map(async (file) => {
-        const configPath = resolve(experimentsDir, file);
         const baseExperimentName = file.replace(/\.ts$/, '');
 
-        let config;
-        try {
-          config = await loadConfig(configPath);
-        } catch (err) {
-          console.error(chalk.red(`Failed to load ${file}: ${err instanceof Error ? err.message : err}`));
+        const plan = await loadExperimentPlan(file, experimentsDir, evalsDir, options.smoke);
+        if (!plan.ok) {
+          if (explicit || plan.reason === 'fixtures') allPassed = false;
           return;
         }
+        const { config, fixtures, evalNames } = plan;
 
         const models = Array.isArray(config.model) ? config.model : [config.model];
-        const availableNames = fixtures.map((f) => f.name);
-        let evalNames: string[];
-        try {
-          evalNames = resolveEvalNames(config.evals, availableNames);
-        } catch {
-          evalNames = availableNames;
-        }
-
-        if (options.smoke) {
-          evalNames = [evalNames.sort()[0]];
-        }
 
         const agent = getAgent(config.agent);
         const apiKeyEnvVar = agent.getApiKeyEnvVar();
         const apiKey = process.env[apiKeyEnvVar] ?? process.env.VERCEL_OIDC_TOKEN;
         if (!apiKey) {
           console.error(chalk.red(`${apiKeyEnvVar} (or VERCEL_OIDC_TOKEN) not set, skipping ${baseExperimentName}`));
+          if (explicit) allPassed = false;
           return;
         }
 
@@ -524,7 +552,7 @@ async function runAllCommand(experimentArgs: string[], options: { dry?: boolean;
 program
   .command('run-all')
   .description('Discover and run all experiments with fingerprint reuse and classification')
-  .argument('[experiments...]', 'Experiment names or glob patterns (default: all)')
+  .argument('[experiments...]', 'Experiment names, glob patterns, or paths like "experiments/cc.ts" (default: all)')
   .option('--dry', 'Preview what would run without executing')
   .option('--force', 'Ignore fingerprints, re-run everything')
   .option('--smoke', 'Run 1 eval per experiment for sanity checking')
@@ -544,7 +572,7 @@ program
  *   agent-eval cc --dry  # preview single experiment
  */
 program
-  .argument('[config]', 'Experiment name (e.g., "cc"). Omit to run all experiments.')
+  .argument('[config]', 'Experiment name (e.g., "cc") or path (e.g., "experiments/cc.ts"). Omit to run all experiments.')
   .option('--dry', 'Preview what would run without executing')
   .option('--smoke', 'Run a single eval to verify setup (API keys, model IDs, sandbox)')
   .option('--force', 'Ignore fingerprints, re-run everything')
