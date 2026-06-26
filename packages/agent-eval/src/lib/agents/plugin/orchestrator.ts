@@ -222,6 +222,9 @@ export async function runWithDefinition(
       agentOptions: options.agentOptions,
       cwd: sandbox.getWorkingDirectory(), // post-relocation cwd; transcript paths use it
       resultPath: RESULT_PATH,
+      // Optional host-computed values (e.g. codex's resolved model/effort/verbosity
+      // that must match the TOML config). Omitted entirely for agents without it.
+      extra: def.runnerExtra?.(options),
     };
     const runEnv = { ...def.authEnv(options), ...neutralWorkspace.env };
     const nodeResult = await sandbox.runCommand('node', [RUNNER_PATH, JSON.stringify(input)], { env: runEnv });

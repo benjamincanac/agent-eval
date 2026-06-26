@@ -1,0 +1,367 @@
+/**
+ * OpenAI Codex in-sandbox runner.
+ *
+ * This file is shipped INTO the sandbox by the orchestrator and executed there as
+ * `node __agent_eval__/run.mjs '<AgentRunInput JSON>'`. It is intentionally
+ * ZERO-DEPENDENCY (only `node:*` builtins) because the sandbox only has the
+ * fixture's own deps + the installed `codex` CLI — it cannot import anything from
+ * the @vercel/agent-eval package.
+ *
+ * Dual mode:
+ *   - runnable: invoked directly → reads argv, runs the agent, writes the result
+ *     file + prints a status line, exits 0.
+ *   - importable: `import { runAgent } from './run.mjs'` → returns a RunnerResult
+ *     (no file write, no exit). This is what a future in-sandbox judge reuses.
+ *
+ * `extractTranscriptFromOutput`, `extractCodexThreadId`, and
+ * `extractObservedModelFromCodexSession` are exported so the host unit tests can
+ * verify them directly (the test imports them from this very file, so there is no
+ * risk of the tested logic drifting from the logic the sandbox actually runs).
+ *
+ * SECRETS: the apiKey is NOT in the AgentRunInput JSON. It arrives via process.env
+ * (AI_GATEWAY_API_KEY for the gateway, else OPENAI_API_KEY for direct OpenAI) and
+ * is piped into `codex login --with-api-key` over stdin — never on the argv.
+ */
+
+import { spawnSync } from 'node:child_process';
+import { mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { homedir } from 'node:os';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+/**
+ * Extract transcript from Codex JSON output.
+ * When run with --json, Codex outputs JSONL to stdout with the full transcript.
+ * Preserved verbatim from the old adapter.
+ *
+ * @param {string} output
+ * @returns {string|undefined}
+ */
+export function extractTranscriptFromOutput(output) {
+  if (!output || !output.trim()) {
+    return undefined;
+  }
+
+  // The --json output is already the transcript in JSONL format.
+  // Filter to only include lines that look like JSON objects.
+  const lines = output.split('\n').filter((line) => {
+    const trimmed = line.trim();
+    return trimmed.startsWith('{') && trimmed.endsWith('}');
+  });
+
+  if (lines.length === 0) {
+    return undefined;
+  }
+
+  return lines.join('\n');
+}
+
+/**
+ * Find the `thread.started` event's thread_id in Codex JSON stdout.
+ * Preserved verbatim from the old adapter. Non-JSON lines are ignored.
+ *
+ * @param {string} output
+ * @returns {string|undefined}
+ */
+export function extractCodexThreadId(output) {
+  for (const line of output.split('\n')) {
+    if (!line.trim()) continue;
+    try {
+      const event = JSON.parse(line);
+      if (event.type === 'thread.started' && typeof event.thread_id === 'string') {
+        return event.thread_id;
+      }
+    } catch {
+      // Ignore non-JSON output lines.
+    }
+  }
+
+  return undefined;
+}
+
+/**
+ * Scan a Codex session transcript (JSONL) for the last `turn_context` model seen.
+ * Preserved verbatim from the old adapter. Non-JSON lines are ignored.
+ *
+ * @param {string|undefined} transcript
+ * @returns {string|undefined}
+ */
+export function extractObservedModelFromCodexSession(transcript) {
+  if (!transcript) return undefined;
+
+  let observedModel;
+  for (const line of transcript.split('\n')) {
+    if (!line.trim()) continue;
+    try {
+      const event = JSON.parse(line);
+      const model = event.payload?.model ?? event.payload?.collaboration_mode?.settings?.model;
+      if (event.type === 'turn_context' && typeof model === 'string') {
+        observedModel = model;
+      }
+    } catch {
+      // Ignore non-JSON transcript lines.
+    }
+  }
+
+  return observedModel;
+}
+
+/**
+ * Recursively collect every `*.jsonl` file path under `~/.codex/sessions`.
+ * The old adapter used `find ~/.codex/sessions -type f -name '*.jsonl'`.
+ *
+ * @param {string} dir
+ * @returns {string[]} absolute paths
+ */
+function listSessionFiles(dir) {
+  const out = [];
+  let entries;
+  try {
+    entries = readdirSync(dir, { withFileTypes: true });
+  } catch {
+    return out;
+  }
+  for (const entry of entries) {
+    const full = join(dir, entry.name);
+    if (entry.isDirectory()) {
+      out.push(...listSessionFiles(full));
+    } else if (entry.isFile() && entry.name.endsWith('.jsonl')) {
+      out.push(full);
+    }
+  }
+  return out;
+}
+
+/**
+ * Locate + read the Codex session transcript file.
+ *
+ * Codex writes JSONL session files under `~/.codex/sessions`. The old adapter, in
+ * shell, did:
+ *   - with a threadId: `find ... -name '*<threadId>*.jsonl' | head -1`
+ *   - without:         `find ... -name '*.jsonl' | sort | tail -1`
+ *
+ * We mirror that exactly: filter by threadId substring when present (first match),
+ * otherwise lexicographically sort all `.jsonl` paths and take the last. Codex
+ * session filenames are timestamp-prefixed, so the lexicographic max is the newest.
+ *
+ * Best-effort: any failure → undefined (never throws).
+ *
+ * @param {string|undefined} threadId
+ * @returns {string|undefined}
+ */
+function captureCodexSessionTranscript(threadId) {
+  try {
+    const sessionsDir = join(homedir(), '.codex', 'sessions');
+    const files = listSessionFiles(sessionsDir);
+    if (files.length === 0) return undefined;
+
+    let chosen;
+    if (threadId) {
+      // `find ... | head -1`: the first match in the traversal order.
+      chosen = files.find((f) => f.includes(threadId));
+    } else {
+      // `find ... | sort | tail -1`: lexicographic max.
+      chosen = files.slice().sort()[files.length - 1];
+    }
+    if (!chosen) return undefined;
+    return readFileSync(chosen, 'utf8');
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * Build the `codex login --with-api-key` arg list. The key itself is piped over
+ * stdin (spawnSync { input }), never placed on the argv.
+ *
+ * @returns {string[]}
+ */
+export function buildCodexLoginArgs() {
+  return ['login', '--with-api-key'];
+}
+
+/**
+ * Build the `codex exec` arg list, reproducing the old shell command verbatim:
+ *   codex exec --profile default[ --model <m>] --dangerously-bypass-approvals-and-sandbox
+ *     --json --skip-git-repo-check[ -c model_reasoning_effort="<e>"]
+ *     [ -c model_verbosity="<v>"] '<prompt>'
+ *
+ * The model / reasoningEffort / verbosity values are HOST-computed (from
+ * parseModelString) and arrive via input.extra so they match the TOML profile.
+ *
+ * Note: with spawnSync (argv, not a shell), the `-c key="value"` tokens keep their
+ * literal quotes exactly as the old shell string had them, and the prompt is a
+ * plain argv element (no shell escaping needed).
+ *
+ * @param {{prompt:string, extra?:Record<string,unknown>}} input
+ * @returns {string[]}
+ */
+export function buildCodexExecArgs(input) {
+  const extra = input.extra ?? {};
+  const cliModel = extra.cliModel ?? null;
+  const reasoningEffort = extra.reasoningEffort ?? null;
+  const verbosity = extra.verbosity ?? null;
+
+  const args = ['exec', '--profile', 'default'];
+  if (cliModel) {
+    args.push('--model', String(cliModel));
+  }
+  args.push('--dangerously-bypass-approvals-and-sandbox', '--json', '--skip-git-repo-check');
+  if (reasoningEffort) {
+    args.push('-c', `model_reasoning_effort="${reasoningEffort}"`);
+  }
+  if (verbosity) {
+    args.push('-c', `model_verbosity="${verbosity}"`);
+  }
+  args.push(input.prompt);
+  return args;
+}
+
+/**
+ * Run Codex over the workspace at `input.cwd` and return a RunnerResult.
+ *
+ * Two-step, mirroring the old adapter's `codex login --with-api-key && codex exec`:
+ *   1. `codex login --with-api-key` with the key piped on stdin. If login exits
+ *      non-zero, short-circuit with ok:false WITHOUT running exec (the old `&&`).
+ *   2. `codex exec ...` — capture transcript + observedModel even on non-zero exit.
+ *
+ * Auth env (AI_GATEWAY_API_KEY / OPENAI_API_KEY) arrives via process.env — the
+ * orchestrator sets it on the `node run.mjs` invocation, and we pass process.env
+ * straight through to the CLI. The login key is read from that same env.
+ *
+ * @param {import('../plugin/contract.js').AgentRunInput} input
+ * @returns {Promise<import('../plugin/contract.js').RunnerResult>}
+ */
+export async function runAgent(input) {
+  // The login key: gateway runs use AI_GATEWAY_API_KEY; direct OpenAI uses
+  // OPENAI_API_KEY. Reading both (gateway first) keeps the runner agnostic to the
+  // mode while never carrying the secret in the argv JSON.
+  const apiKey = process.env.AI_GATEWAY_API_KEY || process.env.OPENAI_API_KEY || '';
+
+  // Step 1: codex login --with-api-key (key piped on stdin). The built-in openai
+  // provider requires bearer auth; the gateway provider reads env_key but login is
+  // harmless/consistent there too. This is the left side of the old `&&`.
+  const login = spawnSync('codex', buildCodexLoginArgs(), {
+    cwd: input.cwd,
+    env: process.env,
+    input: apiKey,
+    encoding: 'utf8',
+    maxBuffer: 64 * 1024 * 1024,
+  });
+
+  const loginStdout = login.stdout || '';
+  const loginStderr = login.stderr || '';
+  const loginExit = login.status == null ? -1 : login.status;
+
+  if (login.error || loginExit !== 0) {
+    // Short-circuit: the old `codex login ... && codex exec ...` never ran exec
+    // when login failed. Surface the same kind of error (last 5 lines, else coded
+    // fallback) over the login output.
+    const loginOutput = loginStdout + loginStderr;
+    const errorLines = loginOutput.trim().split('\n').slice(-5).join('\n');
+    const fallback = login.error
+      ? `Failed to run codex: ${login.error.message}`
+      : `Codex CLI exited with code ${loginExit}`;
+    return {
+      ok: false,
+      output: loginOutput,
+      transcript: null,
+      observedModel: null,
+      error: errorLines || fallback,
+      agentExitCode: loginExit,
+    };
+  }
+
+  // Step 2: codex exec. Blocking is fine — the runner has nothing else to do while
+  // the agent works. The sandbox-level timeout bounds it.
+  const res = spawnSync('codex', buildCodexExecArgs(input), {
+    cwd: input.cwd,
+    env: process.env,
+    encoding: 'utf8',
+    maxBuffer: 64 * 1024 * 1024,
+  });
+
+  const stdout = res.stdout || '';
+  const stderr = res.stderr || '';
+  // Preserve the old concatenation order: stdout THEN stderr.
+  const output = stdout + stderr;
+  // spawnSync sets status=null + error when the binary can't be spawned at all.
+  const agentExitCode = res.status == null ? -1 : res.status;
+
+  // Capture transcript + observed model regardless of success (the old adapter did
+  // this even on the non-zero-exit path). The inline --json on stdout is the
+  // transcript; observedModel comes from the saved session file under ~/.codex.
+  const transcript = extractTranscriptFromOutput(output) ?? null;
+  const threadId = extractCodexThreadId(output);
+  const sessionTranscript = captureCodexSessionTranscript(threadId);
+  const observedModel = extractObservedModelFromCodexSession(sessionTranscript) ?? null;
+
+  if (res.error || agentExitCode !== 0) {
+    // Mirror the old error string: last 5 lines of output, else a coded fallback.
+    const errorLines = output.trim().split('\n').slice(-5).join('\n');
+    const fallback = res.error
+      ? `Failed to run codex: ${res.error.message}`
+      : `Codex CLI exited with code ${agentExitCode}`;
+    return {
+      ok: false,
+      output,
+      transcript,
+      observedModel,
+      error: errorLines || fallback,
+      agentExitCode,
+    };
+  }
+
+  return { ok: true, output, transcript, observedModel, error: null, agentExitCode };
+}
+
+/* ─────────────────────────── runnable (CLI) entry ─────────────────────────── */
+
+// True when this file is executed directly (`node run.mjs ...`), false when imported.
+const isMain = process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1];
+
+if (isMain) {
+  // argv[2] is the AgentRunInput JSON (never contains secrets).
+  const input = JSON.parse(process.argv[2]);
+
+  // Always produce a RunnerResult, even if the runner itself throws, so the host
+  // always has a result file to read (node exit code stays 0 except on a truly
+  // unrecoverable crash before we can write).
+  let result;
+  try {
+    result = await runAgent(input);
+  } catch (e) {
+    result = {
+      ok: false,
+      output: '',
+      transcript: null,
+      observedModel: null,
+      error: e && e.message ? e.message : String(e),
+      agentExitCode: -1,
+    };
+  }
+
+  // Source of truth: the result file the host reads back via sandbox.readFile.
+  try {
+    mkdirSync(dirname(input.resultPath), { recursive: true });
+    writeFileSync(input.resultPath, JSON.stringify(result));
+  } catch {
+    // If the file can't be written, the host falls back to the marker line below.
+  }
+
+  // Fallback channel: a compact status line (no transcript — it can be huge).
+  process.stdout.write(
+    '__AGENT_RESULT__ ' +
+      JSON.stringify({
+        ok: result.ok,
+        observedModel: result.observedModel,
+        error: result.error,
+        agentExitCode: result.agentExitCode,
+      }) +
+      '\n'
+  );
+
+  // Exit 0: "the runner ran". Agent success/failure is conveyed via result.ok, not
+  // the node exit code (the host distinguishes the two).
+  process.exit(0);
+}

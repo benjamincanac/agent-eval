@@ -104,6 +104,18 @@ export interface AgentDefinition {
    * auth branching lives. Receives the resolved apiKey via options.apiKey.
    */
   authEnv(options: AgentRunOptions): Record<string, string>;
+
+  /**
+   * OPTIONAL host-computed values threaded into the runner as `input.extra`.
+   *
+   * Use this when run.mjs needs a value that MUST be derived on the host (e.g.
+   * codex's parseModelString output — the resolved `--model`, reasoning effort,
+   * and verbosity — which must match the TOML config written by configFiles()).
+   * Keeping the derivation host-side avoids re-implementing host-only parsing in
+   * the zero-dependency runner. Must contain NO secrets (it rides in the argv
+   * JSON). Omit (or return undefined) for agents that don't need it.
+   */
+  runnerExtra?(options: AgentRunOptions): Record<string, unknown>;
 }
 
 /**
@@ -128,6 +140,13 @@ export interface AgentRunInput {
   cwd: string;
   /** Where run.mjs writes its RunnerResult JSON (host reads it back). */
   resultPath: string;
+  /**
+   * OPTIONAL host-computed values for the runner (from AgentDefinition.runnerExtra).
+   * Carries values that MUST be derived host-side (e.g. codex's resolved model /
+   * reasoning effort / verbosity, which must match the TOML config). Secrets must
+   * NOT be in here — it rides in the argv JSON.
+   */
+  extra?: Record<string, unknown>;
 }
 
 /**
