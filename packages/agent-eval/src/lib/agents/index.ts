@@ -3,7 +3,7 @@
  */
 
 import { registerAgent, getAgent, listAgents, hasAgent } from './registry.js';
-import { createClaudeCodeAgent } from './claude-code.js';
+import { createClaudeCodeAgent } from './claude-code/agent.js';
 import { createCodexAgent } from './codex.js';
 import { createOpenCodeAgent } from './opencode.js';
 import { createGeminiAgent } from './gemini.js';
