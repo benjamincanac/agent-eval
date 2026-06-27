@@ -13,10 +13,8 @@
  *   - importable: `import { runAgent } from './run.mjs'` → returns a RunnerResult
  *     (no file write, no exit). This is what a future in-sandbox judge reuses.
  *
- * `extractTranscriptFromOutput`, `extractCodexThreadId`, and
- * `extractObservedModelFromCodexSession` are exported so the host unit tests can
- * verify them directly (the test imports them from this very file, so there is no
- * risk of the tested logic drifting from the logic the sandbox actually runs).
+ * The pure helpers below are exported (not just `runAgent`) so they can be
+ * unit-tested directly — the same code the sandbox runs (see codex.test.ts).
  *
  * SECRETS: the apiKey is NOT in the AgentRunInput JSON. It arrives via process.env
  * (AI_GATEWAY_API_KEY for the gateway, else OPENAI_API_KEY for direct OpenAI) and

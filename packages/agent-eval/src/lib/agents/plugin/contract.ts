@@ -12,7 +12,7 @@
  *
  * The generic {@link runWithDefinition} orchestrator (orchestrator.ts) consumes a
  * definition, drives the shared sandbox lifecycle, ships the agent's `run.mjs` into
- * the sandbox, invokes it, and assembles the final {@link AgentRunResult}.
+ * the sandbox, invokes it, and assembles the final `AgentRunResult`.
  *
  * This split exists so the invocation logic lives *in the sandbox* (where a future
  * in-sandbox judge can `import { runAgent }` and reuse it) rather than only on the
@@ -20,11 +20,7 @@
  */
 
 import type { ModelTier } from '../../types.js';
-import type { AgentRunOptions, AgentRunResult } from '../types.js';
-
-// The orchestrator still returns the unchanged AgentRunResult so runner.ts /
-// results.ts are untouched. Re-exported here only for convenience.
-export type { AgentRunResult };
+import type { AgentRunOptions } from '../types.js';
 
 /**
  * One install action the orchestrator runs in the sandbox before invocation.
@@ -126,7 +122,7 @@ export interface AgentDefinition {
  * in process listings).
  */
 export interface AgentRunInput {
-  /** The prompt (already editPrompt'd by the runner). */
+  /** The prompt to run, verbatim (any host-side editPrompt was already applied upstream). */
   prompt: string;
   /** Model override, or undefined for the CLI's native default. */
   model?: string;
@@ -141,10 +137,8 @@ export interface AgentRunInput {
   /** Where run.mjs writes its RunnerResult JSON (host reads it back). */
   resultPath: string;
   /**
-   * OPTIONAL host-computed values for the runner (from AgentDefinition.runnerExtra).
-   * Carries values that MUST be derived host-side (e.g. codex's resolved model /
-   * reasoning effort / verbosity, which must match the TOML config). Secrets must
-   * NOT be in here — it rides in the argv JSON.
+   * OPTIONAL host-computed values from {@link AgentDefinition.runnerExtra} — see
+   * there for what belongs here and the no-secrets constraint.
    */
   extra?: Record<string, unknown>;
 }

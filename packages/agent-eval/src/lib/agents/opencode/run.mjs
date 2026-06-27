@@ -13,12 +13,8 @@
  *   - importable: `import { runAgent } from './run.mjs'` → returns a RunnerResult
  *     (no file write, no exit). This is what a future in-sandbox judge reuses.
  *
- * The pure helpers (`buildOpenCodeCliArgs`, `extractTranscriptFromOutput`,
- * `extractObservedModelFromOpenCodeOutput`, `extractSessionIdFromTranscript`,
- * `extractObservedModelFromSessionExport`) are exported so the host unit tests can
- * verify them directly. The test imports them from THIS file (it used to import the
- * extraction helpers from opencode.ts) so there is no risk of the tested logic
- * drifting from the logic the sandbox actually runs.
+ * The pure helpers below are exported (not just `runAgent`) so they can be
+ * unit-tested directly — the same code the sandbox runs (see opencode.test.ts).
  */
 
 import { spawnSync } from 'node:child_process';

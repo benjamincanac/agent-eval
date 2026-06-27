@@ -13,9 +13,8 @@
  *   - importable: `import { runAgent } from './run.mjs'` → returns a RunnerResult
  *     (no file write, no exit). This is what a future in-sandbox judge reuses.
  *
- * `buildGeminiCliArgs` and `extractTranscriptFromOutput` are exported so the host
- * (or a future unit test) can verify them directly without the tested logic
- * drifting from the logic the sandbox actually runs.
+ * The pure helpers below are exported (not just `runAgent`) so they can be
+ * unit-tested directly — the same code the sandbox runs.
  */
 
 import { spawnSync } from 'node:child_process';

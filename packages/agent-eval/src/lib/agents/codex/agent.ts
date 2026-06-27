@@ -53,6 +53,15 @@ export function parseModelString(model: string): { model: string; reasoningEffor
 }
 
 /**
+ * Parse the run's model option into { model, reasoningEffort }, or all-undefined
+ * for native-default runs. Used by BOTH configFiles() (the TOML profile) and
+ * runnerExtra() (the CLI args), which MUST agree — so the parse happens once.
+ */
+function parseOptionsModel(options: AgentRunOptions): { model?: string; reasoningEffort?: string } {
+  return options.model ? parseModelString(options.model) : { model: undefined, reasoningEffort: undefined };
+}
+
+/**
  * Default reasoning effort and verbosity baked into the generated Codex
  * profile.
  *
@@ -157,7 +166,7 @@ export function createCodexDefinition({ useVercelAiGateway }: { useVercelAiGatew
       // is baked into the profile (rather than passed via -c at runtime) so the
       // value is visible in saved configs and so the CLI's own default of "low"
       // can't sneak through. For native-default runs we omit these settings.
-      const parsed = options.model ? parseModelString(options.model) : { model: undefined, reasoningEffort: undefined };
+      const parsed = parseOptionsModel(options);
       const configContent = generateCodexConfig(parsed.model, useVercelAiGateway, parsed.reasoningEffort, options.webResearch);
       // Absolute `~` path writeFiles can't target → heredoc via shell. Combines the
       // old `mkdir -p ~/.codex` + `cat > ~/.codex/default.config.toml << 'EOF'`.
@@ -192,7 +201,7 @@ export function createCodexDefinition({ useVercelAiGateway }: { useVercelAiGatew
      * else OPENAI_API_KEY — since authEnv() sets exactly one, so no flag is needed here.)
      */
     runnerExtra(options: AgentRunOptions): Record<string, unknown> {
-      const parsed = options.model ? parseModelString(options.model) : { model: undefined, reasoningEffort: undefined };
+      const parsed = parseOptionsModel(options);
       const baseModel = parsed.model;
       // Direct OpenAI API needs unprefixed model names (e.g. "gpt-5.2-codex" not
       // "openai/gpt-5.2-codex"); the gateway keeps the prefix as-is.

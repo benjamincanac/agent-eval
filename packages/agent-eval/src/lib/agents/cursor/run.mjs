@@ -13,9 +13,8 @@
  *   - importable: `import { runAgent } from './run.mjs'` → returns a RunnerResult
  *     (no file write, no exit). This is what a future in-sandbox judge reuses.
  *
- * `buildCursorCliArgs` and `extractTranscriptFromOutput` are exported so the host
- * (and any future test) can verify them directly, guaranteeing the tested logic
- * never drifts from the logic the sandbox actually runs.
+ * The pure helpers below are exported (not just `runAgent`) so they can be
+ * unit-tested directly — the same code the sandbox runs.
  *
  * Cursor's transcript is the `--output-format stream-json` JSONL it prints to
  * stdout/stderr — there is no on-disk session file to read, and (like gemini) no
