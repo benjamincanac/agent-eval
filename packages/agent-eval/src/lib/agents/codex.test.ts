@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { extractCodexThreadId, extractObservedModelFromCodexSession, generateCodexConfig } from './codex.js';
+import { extractCodexThreadId, extractObservedModelFromCodexSession } from './codex/run.mjs';
+import { generateCodexConfig } from './codex/agent.js';
 
 describe('generateCodexConfig', () => {
   it('writes AI Gateway settings as a Codex profile config', () => {

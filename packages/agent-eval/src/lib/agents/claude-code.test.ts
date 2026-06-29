@@ -1,5 +1,8 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { buildClaudeCodeCliArgs, createClaudeCodeAgent, extractObservedModelFromClaudeTranscript } from './claude-code.js';
+// Pure helpers live in the in-sandbox runner (so the tested logic is exactly what
+// the sandbox runs); the Agent factory lives in the host-side definition.
+import { buildClaudeCodeCliArgs, extractObservedModelFromClaudeTranscript } from './claude-code/run.mjs';
+import { createClaudeCodeAgent } from './claude-code/agent.js';
 
 describe('buildClaudeCodeCliArgs', () => {
   const baseOptions = {

@@ -1,10 +1,13 @@
 import { describe, expect, it } from 'vitest';
+// Pure transcript/observed-model helpers live in the in-sandbox runner (so the
+// tested logic is exactly what the sandbox runs); the pure config generator lives
+// in the host-side definition.
 import {
   extractObservedModelFromOpenCodeOutput,
   extractObservedModelFromSessionExport,
   extractSessionIdFromTranscript,
-  generateOpenCodeConfig,
-} from './opencode.js';
+} from './opencode/run.mjs';
+import { generateOpenCodeConfig } from './opencode/agent.js';
 
 describe('generateOpenCodeConfig', () => {
   it('grants only the default tool permissions when webResearch is off', () => {
