@@ -307,6 +307,87 @@ test('greet exists', () => {
     }, 600000); // 10 minute timeout
   });
 
+  describe.skipIf(!hasAiGatewayCredentials)('Agentic judge matcher (EVAL.ts)', () => {
+    // Real end-to-end: a fixture whose EVAL.ts uses the in-sandbox agentic judge
+    // matcher. Each assertion re-invokes the SAME agent (claude) IN the codegen
+    // sandbox to judge the final state / transcript. No mocks.
+    function writeJudgeFixture(name: string, evalBody: string): void {
+      const dir = join(TEST_DIR, name);
+      mkdirSync(join(dir, 'src'), { recursive: true });
+      writeFileSync(
+        join(dir, 'PROMPT.md'),
+        'Create src/greeting.ts that exports a function greet() returning the string "Hello!".'
+      );
+      writeFileSync(join(dir, 'EVAL.ts'), evalBody);
+      writeFileSync(
+        join(dir, 'package.json'),
+        JSON.stringify({ name, type: 'module', devDependencies: { vitest: '^2.1.0' } })
+      );
+      writeFileSync(join(dir, 'src/index.ts'), '');
+    }
+
+    it('PASSES when the judge confirms the code and the transcript', async () => {
+      writeJudgeFixture(
+        'judge-pass',
+        `
+import { test, expect } from 'vitest';
+import { environment, transcript } from '@vercel/agent-eval/eval';
+
+test('environment judge (true)', async () => {
+  await expect(environment).toSatisfyCriterion(
+    'exports a greet() function that returns a non-empty greeting string'
+  );
+});
+test('transcript judge (true)', async () => {
+  await expect(transcript).toSatisfyCriterion(
+    'the agent created or edited at least one TypeScript file'
+  );
+});
+`
+      );
+      const fixture = loadFixture(TEST_DIR, 'judge-pass');
+      const result = await runSingleEval(fixture, {
+        agent: 'vercel-ai-gateway/claude-code',
+        model: 'sonnet',
+        timeout: 900,
+        apiKey: process.env.AI_GATEWAY_API_KEY!,
+        scripts: [],
+      });
+      if (result.result.status === 'failed') {
+        console.error('judge-pass eval output:\n', result.outputContent?.eval);
+      }
+      expect(result.result.status).toBe('passed');
+    }, 900000);
+
+    it('FAILS (attributably) when the judge rejects a false criterion', async () => {
+      writeJudgeFixture(
+        'judge-fail',
+        `
+import { test, expect } from 'vitest';
+import { environment } from '@vercel/agent-eval/eval';
+
+test('environment judge (false)', async () => {
+  await expect(environment).toSatisfyCriterion(
+    'the project uses a PostgreSQL database via the Prisma ORM'
+  );
+});
+`
+      );
+      const fixture = loadFixture(TEST_DIR, 'judge-fail');
+      const result = await runSingleEval(fixture, {
+        agent: 'vercel-ai-gateway/claude-code',
+        model: 'sonnet',
+        timeout: 900,
+        apiKey: process.env.AI_GATEWAY_API_KEY!,
+        scripts: [],
+      });
+      // The judge must REJECT the false criterion → eval fails, and the failure is
+      // attributable to the judge clause in the captured vitest output.
+      expect(result.result.status).toBe('failed');
+      expect(result.outputContent?.eval ?? '').toContain('[judge:environment] FAIL');
+    }, 900000);
+  });
+
   describe.skipIf(!hasAnthropicCredentials)('Claude Code (Direct API) sandbox execution', () => {
     it('can run a simple eval with Claude Code using direct Anthropic API', async () => {
       // Create a simple test fixture

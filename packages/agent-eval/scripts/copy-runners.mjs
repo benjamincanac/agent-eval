@@ -1,10 +1,11 @@
 /**
- * Build step: copy each agent's in-sandbox runner (`src/lib/agents/<agent>/run.mjs`)
- * into the compiled output (`dist/lib/agents/<agent>/run.mjs`).
+ * Build step: copy the in-sandbox `.mjs` artifacts into the compiled output:
+ *   - each agent's runner   `src/lib/agents/<agent>/run.mjs` → `dist/lib/agents/<agent>/run.mjs`
+ *   - the eval helper       `src/lib/agents/eval-helper.mjs` → `dist/lib/agents/eval-helper.mjs`
  *
- * `tsc` only emits .ts → .js; the `.mjs` runners are plain JS artifacts that ship
- * as-is and get read at runtime via `new URL('./run.mjs', import.meta.url)` next to
- * the compiled definition. So they must sit beside the compiled agent.js in dist.
+ * `tsc` only emits .ts → .js; these `.mjs` files are plain JS artifacts that ship
+ * as-is and get read at runtime via `new URL(..., import.meta.url)` next to the
+ * compiled code. So they must sit beside the compiled output in dist.
  */
 
 import { readdirSync, existsSync, mkdirSync, copyFileSync } from 'node:fs';
@@ -24,4 +25,9 @@ for (const entry of readdirSync(SRC, { withFileTypes: true })) {
   copied++;
 }
 
-console.log(`copy-runners: copied ${copied} run.mjs file(s) into ${OUT}`);
+// The in-sandbox eval helper (shipped by the orchestrator before validation).
+mkdirSync(OUT, { recursive: true });
+copyFileSync(join(SRC, 'eval-helper.mjs'), join(OUT, 'eval-helper.mjs'));
+copied++;
+
+console.log(`copy-runners: copied ${copied} .mjs file(s) into ${OUT}`);

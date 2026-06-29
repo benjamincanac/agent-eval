@@ -14,6 +14,7 @@
  */
 
 import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 
 import type { AgentRunOptions, AgentRunResult } from '../types.js';
 import {
@@ -31,6 +32,9 @@ import {
   initGitAndCommit,
   injectTranscriptContext,
   prepareNeutralWorkspace,
+  EVAL_HELPER_PATH,
+  JUDGE_TRANSCRIPT_FILE,
+  JUDGE_CONFIG_PATH,
 } from '../shared.js';
 import type { AgentDefinition, AgentRunInput, RunnerResult } from './contract.js';
 
@@ -43,6 +47,14 @@ type CommandResult = { stdout: string; stderr: string; exitCode: number };
 /** Well-known paths inside the sandbox for the runner + its result file. */
 const RUNNER_PATH = '__agent_eval__/run.mjs';
 const RESULT_PATH = '__agent_eval__/agent-result.json';
+
+/**
+ * Host-disk path to the in-sandbox eval helper, resolved next to the compiled
+ * output (dist/lib/agents/eval-helper.mjs) and in src during dev. Shipped into the
+ * sandbox at {@link EVAL_HELPER_PATH} before validation so EVAL.ts judge matchers
+ * can re-invoke the agent in this sandbox.
+ */
+const EVAL_HELPER_DISK_PATH = fileURLToPath(new URL('../eval-helper.mjs', import.meta.url));
 
 /**
  * Run all install steps for an agent, reproducing the old per-step error wording.
@@ -261,12 +273,31 @@ export async function runWithDefinition(
     }
 
     // 10. VALIDATION (unchanged shared helpers; parseTranscript runs host-side here).
+    // The auth env is reused for the eval process so EVAL.ts judge matchers can
+    // re-invoke the agent in-sandbox (the vitest process inherits it to children).
+    const validationEnv = { ...def.authEnv(options), ...neutralWorkspace.env };
     if (options.validation !== 'none') {
       await sandbox.uploadFiles(testFiles);
       await createVitestConfig(sandbox);
       await injectTranscriptContext(sandbox, transcript, def.o11yAgentName, options.model);
+      // Judge runtime: ship the eval helper, materialize the raw transcript as a
+      // file the judge agent can read by path, and record the judge config (same
+      // agent/model + host-computed extra the codegen run used).
+      await sandbox.writeFiles({
+        [EVAL_HELPER_PATH]: readFileSync(EVAL_HELPER_DISK_PATH, 'utf8'),
+        [JUDGE_TRANSCRIPT_FILE]: transcript ?? '',
+        [JUDGE_CONFIG_PATH]: JSON.stringify({
+          model: options.model ?? null,
+          extra: def.runnerExtra?.(options) ?? null,
+        }),
+      });
     }
-    const validationResults = await runValidation(sandbox, options.scripts ?? [], options.validation);
+    const validationResults = await runValidation(
+      sandbox,
+      options.scripts ?? [],
+      options.validation,
+      validationEnv
+    );
 
     // 11. Capture generated/deleted files (git diff).
     const { generatedFiles, deletedFiles } = await captureGeneratedFiles(sandbox);
