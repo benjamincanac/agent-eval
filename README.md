@@ -163,6 +163,47 @@ The `results.o11y` object is a `TranscriptSummary` with these fields:
 
 > **Note**: If the agent's transcript is unavailable (e.g. the agent crashed before producing output), `results.o11y` will be `null`.
 
+### Agentic LLM judge
+
+For open-ended quality checks that exact assertions can't express, EVAL.ts can run an **agentic LLM judge**. Each judge assertion re-invokes the *same agent* that did the codegen, **in the same sandbox**, to evaluate a criterion — then returns pass/fail. No fresh sandbox, no copying evidence around.
+
+```typescript
+import { test, expect } from 'vitest';
+import { environment, transcript } from '@vercel/agent-eval/eval';
+
+// Judge the final state: the agent explores the project (read/grep/run) for evidence.
+test('uses server components', async () => {
+  await expect(environment).toSatisfyCriterion('uses Server Components for the product list');
+});
+
+// Judge the transcript: how the agent worked. It reads the transcript by path, so the
+// full transcript is never stuffed into a prompt.
+test('diagnosed properly', async () => {
+  await expect(transcript).toSatisfyCriterion('diagnosed with DevTools, not trial-and-error edits');
+});
+
+// Numeric: the judge scores 0-1; assert a threshold (still pass/fail overall).
+test('quality bar', async () => {
+  await expect(environment).toScoreAtLeast('production-quality error handling', 0.8);
+});
+```
+
+Two subjects, imported from `@vercel/agent-eval/eval` — no paths, the subject is implicit:
+
+- `environment` — the judge agent explores the final sandbox state (cwd) with its own tools.
+- `transcript` — the judge agent reads the materialized transcript by path.
+
+Two matchers, on either subject:
+
+- `toSatisfyCriterion(criterion)` — passes when the judge decides the criterion is satisfied.
+- `toScoreAtLeast(criterion, threshold)` — passes when the judge's 0–1 score is `>= threshold`.
+
+You supply only the **criterion** string; the framework owns the judge prompt and the verdict contract. On failure the assertion message carries the judge's reasoning, e.g. `[judge:environment] FAIL (score 0.42): product list is a Client Component`, so a failed judge clause is distinguishable from a failed deterministic test or a crash.
+
+The judge uses the same agent and model as the run under test. Because each assertion is a real agent run, it costs time and tokens — keep criteria focused.
+
+> **Note**: requires `validation: 'vitest'` (the default). The framework gives the eval process the run's credentials automatically so the judge can call the agent CLI in-sandbox.
+
 ## Configuration Reference
 
 ### Experiment config
