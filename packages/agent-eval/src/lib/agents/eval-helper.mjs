@@ -119,8 +119,9 @@ function readJudgeConfig() {
   try {
     return JSON.parse(readFileSync(JUDGE_CONFIG_PATH, 'utf8'));
   } catch {
-    // No config (e.g. run outside the orchestrator) → let the agent CLI default.
-    return { model: null, extra: null };
+    // No config (e.g. run outside the orchestrator) → reuse the codegen runner and
+    // let the agent CLI pick its default model.
+    return { runnerPath: RUNNER_PATH, model: null, extra: null };
   }
 }
 
@@ -136,9 +137,12 @@ function runJudge(subject, criterion, opts = {}) {
   const resultPath = `${JUDGE_IO_DIR}/${id}-result.json`;
   const cfg = readJudgeConfig();
 
-  // Same AgentRunInput contract run.mjs already understands. Reuse the codegen
-  // model + host-computed extra (e.g. codex's resolved model/effort) so the judge
-  // is the SAME agent. No secrets here — the key rides in process.env (inherited).
+  // Same AgentRunInput contract the runner already understands. The judge model +
+  // host-computed extra come from judge-config.json: by default they match the
+  // codegen run (self-grade); when the experiment pins a judge, runnerPath points at
+  // the pinned agent's judge-run.mjs and model is the pinned model. No secrets here —
+  // the key rides in process.env (inherited from the orchestrator's validation env).
+  const runnerPath = cfg.runnerPath ?? RUNNER_PATH;
   const input = {
     prompt: buildJudgePrompt(subject, criterion, verdictPath, opts),
     model: cfg.model ?? undefined,
@@ -147,7 +151,7 @@ function runJudge(subject, criterion, opts = {}) {
     extra: cfg.extra ?? undefined,
   };
 
-  const res = spawnSync('node', [RUNNER_PATH, JSON.stringify(input)], {
+  const res = spawnSync('node', [runnerPath, JSON.stringify(input)], {
     cwd: process.cwd(),
     env: process.env,
     encoding: 'utf8',

@@ -31,8 +31,22 @@ export const EVAL_HELPER_PATH = `${TRANSCRIPT_CONTEXT_DIR}/eval-helper.mjs`;
 /** Raw transcript materialized as a file so the judge agent can read it by path. */
 export const JUDGE_TRANSCRIPT_FILE = `${TRANSCRIPT_CONTEXT_DIR}/transcript.txt`;
 
-/** Judge config (`{ model, extra }`) — the same agent/model the codegen used. */
+/** Judge config (`{ runnerPath, model, extra }`) read by eval-helper.mjs. */
 export const JUDGE_CONFIG_PATH = `${TRANSCRIPT_CONTEXT_DIR}/judge-config.json`;
+
+/** The judge agent's runner, shipped separately ONLY when the judge agent differs
+ * from the codegen agent. When they match, the judge reuses the codegen run.mjs. */
+export const JUDGE_RUNNER_PATH = `${TRANSCRIPT_CONTEXT_DIR}/judge-run.mjs`;
+
+/**
+ * Resolve an agent's API key from the host env. Single source of truth shared by
+ * the CLI (codegen agent) and the orchestrator (a pinned judge agent): the agent's
+ * own key env var, falling back to VERCEL_OIDC_TOKEN — which authenticates both the
+ * Vercel Sandbox and the AI Gateway. Returns undefined when neither is set.
+ */
+export function resolveAgentApiKey(getApiKeyEnvVar: () => string): string | undefined {
+  return process.env[getApiKeyEnvVar()] ?? process.env.VERCEL_OIDC_TOKEN;
+}
 
 /**
  * Combined validation results.

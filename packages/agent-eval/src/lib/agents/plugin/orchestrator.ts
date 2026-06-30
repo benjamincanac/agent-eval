@@ -32,10 +32,13 @@ import {
   initGitAndCommit,
   injectTranscriptContext,
   prepareNeutralWorkspace,
+  resolveAgentApiKey,
   EVAL_HELPER_PATH,
   JUDGE_TRANSCRIPT_FILE,
   JUDGE_CONFIG_PATH,
+  JUDGE_RUNNER_PATH,
 } from '../shared.js';
+import { getAgent } from '../registry.js';
 import type { AgentDefinition, AgentRunInput, RunnerResult } from './contract.js';
 
 /** Union of the two sandbox backends (same alias the old adapters used). */
@@ -55,6 +58,82 @@ const RESULT_PATH = '__agent_eval__/agent-result.json';
  * can re-invoke the agent in this sandbox.
  */
 const EVAL_HELPER_DISK_PATH = fileURLToPath(new URL('../eval-helper.mjs', import.meta.url));
+
+/** The judge-config.json payload eval-helper.mjs reads to invoke the judge. */
+interface JudgeRuntimeConfig {
+  /** Sandbox-relative runner the judge spawns (codegen run.mjs, or judge-run.mjs). */
+  runnerPath: string;
+  /** Model the judge grades with (null → let the agent CLI default). */
+  model: string | null;
+  /** Host-computed runner extra (e.g. codex's resolved model/effort). */
+  extra: Record<string, unknown> | null;
+}
+
+interface JudgeRuntime {
+  /** The judge agent's definition (the codegen `def` itself when self-grading). */
+  judgeDef: AgentDefinition;
+  /** Options the judge runs under (model pinned; apiKey re-resolved if cross-agent). */
+  judgeOptions: AgentRunOptions;
+  /** True when the judge reuses the codegen agent (no extra install/runner needed). */
+  isSelf: boolean;
+  /** Auth env set on the vitest process so the in-sandbox judge inherits credentials. */
+  authEnv: Record<string, string>;
+  /** Judge runner source to ship at JUDGE_RUNNER_PATH; null when self-grading. */
+  runnerSource: string | null;
+  /** The judge-config.json payload eval-helper.mjs reads. */
+  config: JudgeRuntimeConfig;
+}
+
+/**
+ * Resolve the agentic-judge runtime for this run.
+ *
+ * Default (no `options.judge`): the judge IS the codegen agent+model — self-grading,
+ * the historical behavior. No second runner or install is needed; it reuses run.mjs.
+ *
+ * Pinned (`options.judge` set): the judge grades with a fixed agent+model regardless
+ * of the model under test — the apples-to-apples choice for cross-model dashboards.
+ * When the pinned agent differs from the codegen agent we resolve ITS definition,
+ * key (own env var → VERCEL_OIDC_TOKEN), auth env, and runner from the registry; the
+ * caller also installs that agent's CLI (it isn't installed by the codegen setup).
+ */
+export function resolveJudgeRuntime(def: AgentDefinition, options: AgentRunOptions): JudgeRuntime {
+  const spec = options.judge;
+
+  // Same harness as codegen (default, or judge.agent omitted/equal): reuse run.mjs,
+  // just pin the model when asked. Identical to pre-feature behavior when unset.
+  if (!spec || (spec.agent ?? def.name) === def.name) {
+    const judgeOptions = spec ? { ...options, model: spec.model } : options;
+    return {
+      judgeDef: def,
+      judgeOptions,
+      isSelf: true,
+      authEnv: def.authEnv(judgeOptions),
+      runnerSource: null,
+      config: {
+        runnerPath: RUNNER_PATH,
+        model: spec?.model ?? options.model ?? null,
+        extra: def.runnerExtra?.(judgeOptions) ?? null,
+      },
+    };
+  }
+
+  // Pinned to a DIFFERENT agent — resolve its definition + key + runner.
+  const judgeDef = getAgent(spec.agent!).definition;
+  const judgeApiKey = resolveAgentApiKey(judgeDef.getApiKeyEnvVar) ?? '';
+  const judgeOptions: AgentRunOptions = { ...options, model: spec.model, apiKey: judgeApiKey };
+  return {
+    judgeDef,
+    judgeOptions,
+    isSelf: false,
+    authEnv: judgeDef.authEnv(judgeOptions),
+    runnerSource: readFileSync(judgeDef.runnerPath, 'utf8'),
+    config: {
+      runnerPath: JUDGE_RUNNER_PATH,
+      model: spec.model,
+      extra: judgeDef.runnerExtra?.(judgeOptions) ?? null,
+    },
+  };
+}
 
 /**
  * Run all install steps for an agent, reproducing the old per-step error wording.
@@ -215,6 +294,15 @@ export async function runWithDefinition(
     await runInstallSteps(sandbox, def, options);
     await writeConfigFiles(sandbox, def, options);
 
+    // 4b. If the agentic judge is pinned to a DIFFERENT agent, install its CLI +
+    //     config too — the codegen setup above only installed the codegen agent.
+    //     (npm install of project deps re-runs idempotently; the CLI is the point.)
+    const judgeRuntime = resolveJudgeRuntime(def, options);
+    if (!judgeRuntime.isSelf) {
+      await runInstallSteps(sandbox, judgeRuntime.judgeDef, judgeRuntime.judgeOptions);
+      await writeConfigFiles(sandbox, judgeRuntime.judgeDef, judgeRuntime.judgeOptions);
+    }
+
     // 5. Guard: no stray test files leaked into the workspace before the agent runs.
     await verifyNoTestFiles(sandbox);
 
@@ -273,24 +361,27 @@ export async function runWithDefinition(
     }
 
     // 10. VALIDATION (unchanged shared helpers; parseTranscript runs host-side here).
-    // The auth env is reused for the eval process so EVAL.ts judge matchers can
+    // The JUDGE's auth env is set on the eval process so EVAL.ts judge matchers can
     // re-invoke the agent in-sandbox (the vitest process inherits it to children).
-    const validationEnv = { ...def.authEnv(options), ...neutralWorkspace.env };
+    // By default the judge is the codegen agent+model; options.judge pins a fixed one
+    // (judgeRuntime was resolved at step 4b so its CLI could be installed).
+    const validationEnv = { ...judgeRuntime.authEnv, ...neutralWorkspace.env };
     if (options.validation !== 'none') {
       await sandbox.uploadFiles(testFiles);
       await createVitestConfig(sandbox);
       await injectTranscriptContext(sandbox, transcript, def.o11yAgentName, options.model);
       // Judge runtime: ship the eval helper, materialize the raw transcript as a
-      // file the judge agent can read by path, and record the judge config (same
-      // agent/model + host-computed extra the codegen run used).
-      await sandbox.writeFiles({
+      // file the judge agent can read by path, record the judge config, and — only
+      // when the judge is a DIFFERENT agent — ship its runner alongside run.mjs.
+      const judgeFiles: Record<string, string> = {
         [EVAL_HELPER_PATH]: readFileSync(EVAL_HELPER_DISK_PATH, 'utf8'),
         [JUDGE_TRANSCRIPT_FILE]: transcript ?? '',
-        [JUDGE_CONFIG_PATH]: JSON.stringify({
-          model: options.model ?? null,
-          extra: def.runnerExtra?.(options) ?? null,
-        }),
-      });
+        [JUDGE_CONFIG_PATH]: JSON.stringify(judgeRuntime.config),
+      };
+      if (judgeRuntime.runnerSource) {
+        judgeFiles[JUDGE_RUNNER_PATH] = judgeRuntime.runnerSource;
+      }
+      await sandbox.writeFiles(judgeFiles);
     }
     const validationResults = await runValidation(
       sandbox,

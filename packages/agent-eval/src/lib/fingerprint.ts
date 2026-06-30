@@ -23,6 +23,7 @@ interface FingerprintableConfig {
   earlyExit: boolean;
   runs: number;
   webResearch?: boolean;
+  judge?: { agent?: string; model: string };
 }
 
 /**
@@ -84,6 +85,11 @@ export function computeFingerprint(evalPath: string, config: RunnableExperimentC
   // result for a research run, or vice versa.
   if (config.webResearch) {
     configForHash.webResearch = true;
+  }
+  // Included only when the judge is pinned, so existing (unpinned) fingerprints are
+  // unchanged. Changing the judge agent/model invalidates the cache → re-runs.
+  if (config.judge) {
+    configForHash.judge = { agent: config.judge.agent, model: config.judge.model };
   }
   hash.update(`config:${JSON.stringify(configForHash)}`);
 

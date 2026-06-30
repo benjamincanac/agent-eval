@@ -197,4 +197,49 @@ describe('computeFingerprint', () => {
     expect(fpModelB).toBe(fpModelBAfter);
     expect(fpModelA).not.toBe(fpModelB); // different models = different fingerprints
   });
+
+  it('keeps unpinned-judge equivalent to existing fingerprints', () => {
+    const evalDir = createEvalDir('eval-judge-default', {
+      'PROMPT.md': 'Do something',
+      'EVAL.ts': 'test code',
+      'package.json': '{"type":"module"}',
+    });
+
+    // Cached results predate the judge field; an unpinned config must hash the same.
+    const fp1 = computeFingerprint(evalDir, baseConfig);
+    const fp2 = computeFingerprint(evalDir, { ...baseConfig, judge: undefined });
+
+    expect(fp1).toBe(fp2);
+  });
+
+  it('changes when a judge is pinned (judged results must not reuse self-graded ones)', () => {
+    const evalDir = createEvalDir('eval-judge-pinned', {
+      'PROMPT.md': 'Do something',
+      'EVAL.ts': 'test code',
+      'package.json': '{"type":"module"}',
+    });
+
+    const fp1 = computeFingerprint(evalDir, baseConfig);
+    const fp2 = computeFingerprint(evalDir, { ...baseConfig, judge: { model: 'claude-opus-4-8' } });
+
+    expect(fp1).not.toBe(fp2);
+  });
+
+  it('changes when the judge model or agent changes', () => {
+    const evalDir = createEvalDir('eval-judge-vary', {
+      'PROMPT.md': 'Do something',
+      'EVAL.ts': 'test code',
+      'package.json': '{"type":"module"}',
+    });
+
+    const opus = computeFingerprint(evalDir, { ...baseConfig, judge: { model: 'claude-opus-4-8' } });
+    const sonnet = computeFingerprint(evalDir, { ...baseConfig, judge: { model: 'claude-sonnet-4-5' } });
+    const opusGateway = computeFingerprint(evalDir, {
+      ...baseConfig,
+      judge: { agent: 'vercel-ai-gateway/claude-code', model: 'claude-opus-4-8' },
+    });
+
+    expect(opus).not.toBe(sonnet); // different judge model
+    expect(opus).not.toBe(opusGateway); // different judge agent
+  });
 });

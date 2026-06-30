@@ -386,6 +386,38 @@ test('environment judge (false)', async () => {
       expect(result.result.status).toBe('failed');
       expect(result.outputContent?.eval ?? '').toContain('[judge:environment] FAIL');
     }, 900000);
+
+    it('PASSES with a judge pinned to a different model than codegen', async () => {
+      // Codegen runs sonnet; the judge is pinned to a fixed model (opus). This is the
+      // cross-model dashboard config — grade every model with one fixed judge. Proves
+      // the pinned model flows: judge-config.model = the pinned model, not codegen's.
+      writeJudgeFixture(
+        'judge-pinned',
+        `
+import { test, expect } from 'vitest';
+import { environment } from '@vercel/agent-eval/eval';
+
+test('environment judge (pinned, true)', async () => {
+  await expect(environment).toSatisfyCriterion(
+    'exports a greet() function that returns a non-empty greeting string'
+  );
+});
+`
+      );
+      const fixture = loadFixture(TEST_DIR, 'judge-pinned');
+      const result = await runSingleEval(fixture, {
+        agent: 'vercel-ai-gateway/claude-code',
+        model: 'sonnet',
+        timeout: 900,
+        apiKey: process.env.AI_GATEWAY_API_KEY!,
+        scripts: [],
+        judge: { model: 'claude-opus-4-8' },
+      });
+      if (result.result.status === 'failed') {
+        console.error('judge-pinned eval output:\n', result.outputContent?.eval);
+      }
+      expect(result.result.status).toBe('passed');
+    }, 900000);
   });
 
   describe.skipIf(!hasAnthropicCredentials)('Claude Code (Direct API) sandbox execution', () => {

@@ -65,6 +65,24 @@ const experimentConfigSchema = z.object({
     isYourBrand: z.boolean().optional(),
   })).optional(),
   onRunComplete: z.function().optional(),
+  // Pin the agentic LLM judge. `agent` defaults to the codegen agent; `model` is
+  // required (pinning the judge model is the point).
+  judge: z
+    .object({
+      agent: z
+        .enum([
+          'vercel-ai-gateway/claude-code',
+          'claude-code',
+          'vercel-ai-gateway/codex',
+          'codex',
+          'vercel-ai-gateway/opencode',
+          'gemini',
+          'cursor',
+        ])
+        .optional(),
+      model: z.string(),
+    })
+    .optional(),
 });
 
 /**
@@ -112,6 +130,7 @@ export function resolveConfig(config: ExperimentConfig): ResolvedExperimentConfi
     webResearch: config.webResearch,
     brands: config.brands,
     onRunComplete: config.onRunComplete,
+    judge: config.judge,
   };
 }
 
