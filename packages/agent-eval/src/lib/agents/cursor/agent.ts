@@ -92,5 +92,6 @@ export function createCursorAgent(): Agent {
       return definition.defaultModel;
     },
     run: (fixturePath, options) => runWithDefinition(definition, fixturePath, options),
+    definition,
   };
 }

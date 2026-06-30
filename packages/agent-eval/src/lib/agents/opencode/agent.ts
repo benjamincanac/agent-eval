@@ -207,5 +207,6 @@ export function createOpenCodeAgent(): Agent {
       return definition.defaultModel;
     },
     run: (fixturePath, options) => runWithDefinition(definition, fixturePath, options),
+    definition,
   };
 }

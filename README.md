@@ -200,7 +200,22 @@ Two matchers, on either subject:
 
 You supply only the **criterion** string; the framework owns the judge prompt and the verdict contract. On failure the assertion message carries the judge's reasoning, e.g. `[judge:environment] FAIL (score 0.42): product list is a Client Component`, so a failed judge clause is distinguishable from a failed deterministic test or a crash.
 
-The judge uses the same agent and model as the run under test. Because each assertion is a real agent run, it costs time and tokens — keep criteria focused.
+By default the judge uses the **same agent and model** as the run under test (self-grading). Because each assertion is a real agent run, it costs time and tokens — keep criteria focused.
+
+**Pin the judge** to grade every run with one fixed agent + model — the apples-to-apples choice when comparing models, since the judge quality no longer varies with the model under test (and a model never grades itself):
+
+```typescript
+const config: ExperimentConfig = {
+  agent: 'codex',
+  model: 'gpt-5.4',
+  // Grade with a fixed Claude judge regardless of the model under test.
+  judge: { agent: 'vercel-ai-gateway/claude-code', model: 'claude-opus-4-8' },
+};
+```
+
+- `judge.model` is required (pinning the model is the point).
+- `judge.agent` is optional and defaults to the codegen agent — omit it to keep the same harness and only pin the model. When it names a different agent, that agent's CLI is installed in the sandbox automatically and its key is resolved from its own env var (falling back to `VERCEL_OIDC_TOKEN`).
+- Pinning changes the eval fingerprint, so a pinned run won't reuse self-graded cached results.
 
 > **Note**: requires `validation: 'vitest'` (the default). The framework gives the eval process the run's credentials automatically so the judge can call the agent CLI in-sandbox.
 
@@ -279,6 +294,10 @@ const config: ExperimentConfig = {
   // 'changed' - copy only files modified by the agent
   // 'all' - copy the entire project including original fixture files
   copyFiles: 'changed',
+
+  // Pin the agentic LLM judge (see "Agentic LLM judge" above). Omit to self-grade
+  // with the codegen agent+model. `model` required; `agent` defaults to codegen.
+  judge: { agent: 'vercel-ai-gateway/claude-code', model: 'claude-opus-4-8' },
 };
 
 export default config;

@@ -84,5 +84,6 @@ export function createClaudeCodeAgent({ useVercelAiGateway }: { useVercelAiGatew
       return definition.defaultModel;
     },
     run: (fixturePath, options) => runWithDefinition(definition, fixturePath, options),
+    definition,
   };
 }

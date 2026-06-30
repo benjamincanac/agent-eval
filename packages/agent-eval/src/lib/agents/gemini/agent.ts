@@ -75,5 +75,6 @@ export function createGeminiAgent(): Agent {
       return definition.defaultModel;
     },
     run: (fixturePath, options) => runWithDefinition(definition, fixturePath, options),
+    definition,
   };
 }

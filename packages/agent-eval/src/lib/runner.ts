@@ -195,6 +195,7 @@ export async function runExperiment(
         sandbox: config.sandbox,
         agentOptions: config.agentOptions,
         webResearch: config.webResearch,
+        judge: config.judge,
       }),
       new Promise<never>((_, reject) => {
         timeoutId = setTimeout(() => {
@@ -388,6 +389,7 @@ export async function runSingleEval<T extends ResolvedExperimentConfig['model']>
     verbose?: boolean;
     agentOptions?: ResolvedExperimentConfig['agentOptions'];
     webResearch?: ResolvedExperimentConfig['webResearch'];
+    judge?: ResolvedExperimentConfig['judge'];
   }
 ): Promise<T extends Array<unknown> ? EvalRunData[] : EvalRunData> {
   const agent = getAgent(options.agent ?? 'vercel-ai-gateway/claude-code');
@@ -411,6 +413,7 @@ export async function runSingleEval<T extends ResolvedExperimentConfig['model']>
 		sandbox: options.sandbox,
 		agentOptions: options.agentOptions,
 		webResearch: options.webResearch,
+		judge: options.judge,
 	});
 
     results.push(agentResultToEvalRunData(agentResult));

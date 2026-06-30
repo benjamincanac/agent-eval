@@ -237,5 +237,6 @@ export function createCodexAgent({ useVercelAiGateway }: { useVercelAiGateway: b
       return definition.defaultModel;
     },
     run: (fixturePath, options) => runWithDefinition(definition, fixturePath, options),
+    definition,
   };
 }
