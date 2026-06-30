@@ -541,6 +541,54 @@ On subsequent runs, evals with a matching fingerprint and a valid cached result 
 
 Use `--force` to bypass fingerprinting and re-run everything. Functions like `setup` and `editPrompt` cannot be hashed, so use `--force` when you change those.
 
+Each result also stores a `contentFingerprint` — a hash of the eval files **only**, independent of config. This separates "the eval itself changed" from "a config field changed."
+
+### Carrying forward config-only changes
+
+A benign config change (e.g. bumping `timeout`) changes the combined fingerprint and would otherwise re-run every eval. `agent-eval refingerprint` carries those forward in the cached results **without masking a real eval change**:
+
+```bash
+agent-eval refingerprint            # all experiments
+agent-eval refingerprint cc --dry   # preview one experiment
+```
+
+For each cached result it compares the eval's current `contentFingerprint` to the stored one: if the content is unchanged it re-stamps the combined fingerprint (the result stays cached); if the content **changed** it leaves the result stale so it re-runs. `agent-eval status` already classifies by eval *content*, so it never reports a config-only change as work — run `refingerprint` after editing an experiment config to carry that change into the cache (`run` does this automatically).
+
+### After changing or syncing evals: status → pick what to run
+
+Run `agent-eval` with no arguments. It shows the work, then — in a terminal — lets you multi-select which experiments to run. It never re-runs everything:
+
+```bash
+agent-eval
+```
+```
+Evals needing work:
+  new      agent-026-no-serial-await
+  changed  agent-024-avoid-redundant-usestate
+
+Work to do — 6 run(s) across 3 experiment(s):
+  claude-opus-4.6      2 to run  (22 up to date)
+  ...
+
+Pick experiments to run:
+   1  claude-opus-4.6
+   2  claude-sonnet-4.6
+Numbers (e.g. 1,3), "all", or Enter to skip:
+```
+
+Status classifies each eval by **content**, so a benign config change (e.g. pinning a judge) is never reported as work. The same building blocks work non-interactively:
+
+```bash
+agent-eval status                  # read-only: what's new/changed, per experiment
+agent-eval status --check          # exit non-zero if anything is new/changed (simple CI gate)
+agent-eval status --json           # machine-readable, for custom CI policy
+agent-eval run claude-sonnet-4.6   # run the named experiment(s) — new/changed evals only
+```
+
+**Accepting staleness is the consumer's call, not the framework's.** `agent-eval` only *reports* — it has no `keep`/`acknowledge`. If you want to leave some experiments on an older eval while keeping others fresh, do that in your own CI: read `agent-eval status --json` (per-experiment `new`/`changed`) and fail only on experiments not in your accepted-stale list. (See next-evals-oss's `scripts/check-stale.mjs` for an example.)
+
+> `refingerprint` (carry config-only changes forward) runs automatically inside `run`; your sync script should call `agent-eval refingerprint` after pulling evals so committed results pick up benign config changes without re-running.
+
 ## Failure Classification
 
 When evals fail, the framework optionally classifies each failure as one of:

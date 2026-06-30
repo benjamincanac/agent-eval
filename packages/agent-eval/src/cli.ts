@@ -6,8 +6,9 @@
 
 import { Command } from 'commander';
 import { config as dotenvConfig } from 'dotenv';
-import { resolve, dirname, basename } from 'path';
-import { existsSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'fs';
+import { resolve, dirname, basename, join } from 'path';
+import { existsSync, readFileSync, readdirSync, rmSync, writeFileSync, statSync } from 'fs';
+import { createInterface } from 'node:readline';
 import { fileURLToPath } from 'url';
 import chalk from 'chalk';
 import { loadConfig, resolveEvalNames } from './lib/config.js';
@@ -19,7 +20,7 @@ import { initProject, getPostInitInstructions } from './lib/init.js';
 import { getAgent } from './lib/agents/index.js';
 import { resolveAgentApiKey } from './lib/agents/shared.js';
 import { getSandboxBackendInfo } from './lib/sandbox.js';
-import { computeFingerprint } from './lib/fingerprint.js';
+import { computeFingerprint, computeContentFingerprint, decideRefingerprint } from './lib/fingerprint.js';
 import { scanReusableResults } from './lib/results.js';
 import { isClassifierEnabled, classifyFailure } from './lib/classifier.js';
 import { housekeep } from './lib/housekeeping.js';
@@ -335,94 +336,6 @@ async function runAllCommand(experimentArgs: string[], options: { dry?: boolean;
         process.exit(1);
       }
 
-      // --- Dry run: collect info and print a single summary table ---
-      if (options.dry) {
-        interface DryRunInfo { name: string; toRun: string[]; cached: number; total: number }
-        const dryResults: DryRunInfo[] = [];
-
-        for (const file of selectedFiles) {
-          const configPath = resolve(experimentsDir, file);
-          const baseExperimentName = file.replace(/\.ts$/, '');
-
-          let config;
-          try {
-            config = await loadConfig(configPath);
-          } catch (err) {
-            console.error(chalk.red(`Failed to load ${file}: ${err instanceof Error ? err.message : err}`));
-            continue;
-          }
-
-          const models = Array.isArray(config.model) ? config.model : [config.model];
-          const availableNames = fixtures.map((f) => f.name);
-          let evalNames: string[];
-          try {
-            evalNames = resolveEvalNames(config.evals, availableNames);
-          } catch {
-            evalNames = availableNames;
-          }
-
-          if (options.smoke) {
-            evalNames = [evalNames.sort()[0]];
-          }
-
-          for (const model of models) {
-            const experimentName = models.length > 1
-              ? `${baseExperimentName}/${model}`
-              : baseExperimentName;
-
-            const modelConfig = { ...config, model, runs: options.smoke ? 1 : config.runs };
-            const selectedFixtures = fixtures.filter((f) => evalNames.includes(f.name));
-            const fingerprints: Record<string, string> = {};
-            for (const fixture of selectedFixtures) {
-              fingerprints[fixture.name] = computeFingerprint(fixture.path, modelConfig);
-            }
-
-            let fixturesToRun = selectedFixtures;
-            if (!options.force && !options.smoke) {
-              const reusable = scanReusableResults(resultsDir, experimentName, fingerprints);
-              if (reusable.size > 0) {
-                fixturesToRun = selectedFixtures.filter((f) => !reusable.has(f.name));
-              }
-            }
-
-            dryResults.push({
-              name: experimentName,
-              toRun: fixturesToRun.map((f) => f.name),
-              cached: selectedFixtures.length - fixturesToRun.length,
-              total: selectedFixtures.length,
-            });
-          }
-        }
-
-        // Print summary
-        const totalToRun = dryResults.reduce((sum, d) => sum + d.toRun.length, 0);
-        const totalCached = dryResults.reduce((sum, d) => sum + d.cached, 0);
-        const nameWidth = Math.max(...dryResults.map((d) => d.name.length)) + 2;
-
-        console.log('');
-        if (totalToRun === 0) {
-          console.log(chalk.green(`  All ${totalCached} evals cached across ${dryResults.length} experiments. Nothing to run.`));
-        } else {
-          console.log(chalk.bold(`  ${totalToRun} evals to run, ${totalCached} cached\n`));
-          for (const d of dryResults) {
-            const label = d.name.padEnd(nameWidth);
-            if (d.toRun.length === 0) {
-              console.log(chalk.gray(`  ${label} ${d.total} cached`));
-            } else {
-              console.log(
-                chalk.white(`  ${label}`) +
-                chalk.blue(` ${d.toRun.length} to run`) +
-                (d.cached > 0 ? chalk.gray(`, ${d.cached} cached`) : '')
-              );
-              for (const name of d.toRun) {
-                console.log(chalk.green(`  ${' '.repeat(nameWidth)} → ${name}`));
-              }
-            }
-          }
-        }
-        console.log('');
-        return;
-      }
 
       // --- Live run ---
       const useDashboard = process.stdout.isTTY && selectedFiles.length > 1;
@@ -494,13 +407,15 @@ async function runAllCommand(experimentArgs: string[], options: { dry?: boolean;
 
           const selectedFixtures = fixtures.filter((f) => evalNames.includes(f.name));
           const fingerprints: Record<string, string> = {};
+          const contentFingerprints: Record<string, string> = {};
           for (const fixture of selectedFixtures) {
             fingerprints[fixture.name] = computeFingerprint(fixture.path, modelConfig);
+            contentFingerprints[fixture.name] = computeContentFingerprint(fixture.path);
           }
 
           const classifierOn = isClassifierEnabled();
 
-          // Scan for reusable results
+          // Scan for reusable (fresh) results.
           let fixturesToRun = selectedFixtures;
           if (!options.force && !options.smoke) {
             const reusable = scanReusableResults(resultsDir, experimentName, fingerprints);
@@ -532,6 +447,7 @@ async function runAllCommand(experimentArgs: string[], options: { dry?: boolean;
                 resultsDir,
                 experimentName,
                 fingerprints,
+                contentFingerprints,
                 smoke: options.smoke,
                 onProgress,
                 rateLimiter,
@@ -689,37 +605,358 @@ async function runAllCommand(experimentArgs: string[], options: { dry?: boolean;
 }
 
 /**
- * run-all subcommand (explicit)
+ * Resolve and validate the standard project layout (experiments/, evals/, results/).
+ * Shared by `status`, `run`, and `refingerprint`.
  */
+function resolveProjectDirs(): { experimentsDir: string; evalsDir: string; resultsDir: string } {
+  const projectDir = process.cwd();
+  const experimentsDir = resolve(projectDir, 'experiments');
+  const evalsDir = resolve(projectDir, 'evals');
+  const resultsDir = resolve(projectDir, 'results');
+  if (!existsSync(experimentsDir) || !existsSync(resultsDir)) {
+    console.error(chalk.red('experiments/ and results/ directories are required'));
+    process.exit(1);
+  }
+  return { experimentsDir, evalsDir, resultsDir };
+}
+
+/** Select experiment config files, optionally filtered by name/glob args. */
+function selectExperimentFiles(experimentsDir: string, experimentArgs: string[]): string[] {
+  const allFiles = readdirSync(experimentsDir)
+    .filter((f) => f.endsWith('.ts') && !f.startsWith('_temp_'))
+    .sort();
+  return experimentArgs.length > 0
+    ? allFiles.filter((f) => {
+        const name = f.replace(/\.ts$/, '');
+        return experimentArgs.some((arg) => (arg.includes('*') ? minimatch(name, arg) : name === arg));
+      })
+    : allFiles;
+}
+
+/** The newest result summary for an (experiment, eval), or null if never run. */
+function findNewestSummary(experimentResultsDir: string, evalName: string): Record<string, unknown> | null {
+  if (!existsSync(experimentResultsDir)) return null;
+  const timestamps = readdirSync(experimentResultsDir)
+    .filter((t) => !t.startsWith('.'))
+    .sort()
+    .reverse();
+  for (const ts of timestamps) {
+    const sp = join(experimentResultsDir, ts, evalName, 'summary.json');
+    if (existsSync(sp)) {
+      try {
+        return JSON.parse(readFileSync(sp, 'utf-8'));
+      } catch {
+        /* skip */
+      }
+    }
+  }
+  return null;
+}
+
+/**
+ * Status handler: the one read-only command to answer "what's the work to be done?"
+ * after editing or syncing evals. For each (experiment, eval) it classifies the newest
+ * result by EVAL CONTENT (so a benign config-only change isn't reported as work):
+ *
+ *   - new      → the eval was never run for this experiment
+ *   - changed  → the eval's content changed since it was run
+ *   - up to date
+ *
+ * The framework only REPORTS; it has no opinion on which staleness is acceptable —
+ * that policy lives in the consumer (e.g. `agent-eval status --json` in CI, filtered
+ * against the repo's own accepted-stale list). `--check` is a simple gate that fails
+ * on any new/changed eval. Writes nothing.
+ */
+interface StatusRow { name: string; baseName: string; newEvals: string[]; changedEvals: string[]; cached: number }
+
+async function statusCommand(
+  experimentArgs: string[],
+  options: { check?: boolean; json?: boolean } = {}
+): Promise<{ rows: StatusRow[]; totalRun: number }> {
+  const { experimentsDir, evalsDir, resultsDir } = resolveProjectDirs();
+  const selectedFiles = selectExperimentFiles(experimentsDir, experimentArgs);
+  const { fixtures } = loadAllFixtures(evalsDir);
+  const availableNames = fixtures.map((f) => f.name);
+  const fixtureByName = new Map(fixtures.map((f) => [f.name, f]));
+
+  const allNew = new Set<string>();
+  const allChanged = new Set<string>();
+  const rows: StatusRow[] = [];
+
+  for (const file of selectedFiles) {
+    let config;
+    try {
+      config = await loadConfig(resolve(experimentsDir, file));
+    } catch (err) {
+      if (!options.json) console.warn(chalk.yellow(`Skipping ${file}: ${err instanceof Error ? err.message : err}`));
+      continue;
+    }
+    const baseName = file.replace(/\.ts$/, '');
+    const models = Array.isArray(config.model) ? config.model : [config.model];
+    let evalNames: string[];
+    try {
+      evalNames = resolveEvalNames(config.evals, availableNames);
+    } catch {
+      evalNames = availableNames;
+    }
+
+    for (const model of models) {
+      const experimentName = models.length > 1 ? `${baseName}/${model}` : baseName;
+      const modelConfig = { ...config, model };
+      const expResultsDir = join(resultsDir, experimentName);
+      const newEvals: string[] = [];
+      const changedEvals: string[] = [];
+      let cached = 0;
+
+      for (const ev of evalNames) {
+        const fx = fixtureByName.get(ev);
+        if (!fx) continue;
+        const summary = findNewestSummary(expResultsDir, ev);
+        if (!summary) {
+          newEvals.push(ev);
+          allNew.add(ev);
+          continue;
+        }
+        const content = computeContentFingerprint(fx.path);
+        const storedContent = summary.contentFingerprint as string | undefined;
+        // Content-based: a config-only change isn't work (refingerprint carries it).
+        // Legacy results (no content hash) fall back to the combined fingerprint.
+        const fresh = storedContent !== undefined
+          ? storedContent === content
+          : summary.fingerprint === computeFingerprint(fx.path, modelConfig as never);
+        if (fresh) cached++;
+        else {
+          changedEvals.push(ev);
+          allChanged.add(ev);
+        }
+      }
+      rows.push({ name: experimentName, baseName, newEvals, changedEvals, cached });
+    }
+  }
+
+  const totalRun = rows.reduce((s, r) => s + r.newEvals.length + r.changedEvals.length, 0);
+
+  if (options.json) {
+    const work = rows
+      .filter((r) => r.newEvals.length || r.changedEvals.length)
+      .map((r) => ({ experiment: r.name, new: r.newEvals, changed: r.changedEvals }));
+    console.log(JSON.stringify({ totalRun, work }, null, 2));
+    return { rows, totalRun };
+  }
+
+  console.log('');
+  if (allNew.size > 0 || allChanged.size > 0) {
+    console.log(chalk.bold('Evals needing work:'));
+    for (const e of [...allNew].sort()) console.log(`  ${chalk.green('new')}      ${e}`);
+    for (const e of [...allChanged].sort()) console.log(`  ${chalk.yellow('changed')}  ${e}`);
+    console.log('');
+  }
+
+  if (totalRun === 0) {
+    console.log(chalk.green('Everything up to date — nothing to run.\n'));
+    return { rows, totalRun: 0 };
+  }
+
+  const nameWidth = Math.max(...rows.map((r) => r.name.length)) + 2;
+  console.log(chalk.bold(`Work to do — ${totalRun} run(s) across ${rows.filter((r) => r.newEvals.length + r.changedEvals.length).length} experiment(s):`));
+  for (const r of rows) {
+    const n = r.newEvals.length + r.changedEvals.length;
+    if (n === 0) continue;
+    const extra = r.cached ? chalk.gray(`  (${r.cached} up to date)`) : '';
+    console.log(`  ${r.name.padEnd(nameWidth)}${chalk.yellow(`${n} to run`)}${extra}`);
+  }
+  console.log('');
+  console.log(chalk.gray('Run:  agent-eval run <experiment...>   (or run `agent-eval` to pick interactively)'));
+  console.log('');
+
+  if (options.check) {
+    console.log(chalk.red(`✗ ${totalRun} eval-run(s) outstanding.`));
+    process.exitCode = 1;
+  }
+  return { rows, totalRun };
+}
+
+/**
+ * Refingerprint handler: carry forward CONFIG-only changes in existing results so
+ * benign edits (e.g. a timeout bump) don't trigger reruns — WITHOUT masking real
+ * eval changes. For each committed result we compare the eval's current content
+ * fingerprint to the one the result was produced with:
+ *
+ *   - content unchanged → re-stamp the combined fingerprint (carry the config change)
+ *   - content changed    → leave it stale (an honest "this eval changed, rerun me")
+ *   - legacy result (no stored content fingerprint) → adopt the current content
+ *     fingerprint only if the result is already fully current; otherwise leave stale
+ *
+ * This replaces the old consumer-side `updateFingerprints`, which re-stamped every
+ * result unconditionally and so silently hid eval changes.
+ */
+async function carryForwardConfigChanges(
+  experimentsDir: string,
+  evalsDir: string,
+  resultsDir: string,
+  selectedFiles: string[],
+  dry = false
+): Promise<{ carried: number; stale: number }> {
+  let carried = 0;
+  let stale = 0;
+  for (const file of selectedFiles) {
+    let config;
+    try {
+      config = await loadConfig(resolve(experimentsDir, file));
+    } catch {
+      continue;
+    }
+    const baseName = file.replace(/\.ts$/, '');
+    const models = Array.isArray(config.model) ? config.model : [config.model];
+    for (const model of models) {
+      const experimentName = models.length > 1 ? `${baseName}/${model}` : baseName;
+      const modelConfig = { ...config, model };
+      const expResultsDir = join(resultsDir, experimentName);
+      if (!existsSync(expResultsDir)) continue;
+      for (const timestamp of readdirSync(expResultsDir)) {
+        const tsDir = join(expResultsDir, timestamp);
+        if (!statSync(tsDir).isDirectory()) continue;
+        for (const evalName of readdirSync(tsDir)) {
+          const summaryPath = join(tsDir, evalName, 'summary.json');
+          const evalPath = join(evalsDir, evalName);
+          if (!existsSync(summaryPath) || !existsSync(evalPath)) continue;
+          const summary = JSON.parse(readFileSync(summaryPath, 'utf-8'));
+          const decision = decideRefingerprint(
+            { fingerprint: summary.fingerprint, contentFingerprint: summary.contentFingerprint },
+            {
+              fingerprint: computeFingerprint(evalPath, modelConfig as never),
+              contentFingerprint: computeContentFingerprint(evalPath),
+            }
+          );
+          let changed = false;
+          if (decision.fingerprint !== undefined) {
+            summary.fingerprint = decision.fingerprint;
+            changed = true;
+          }
+          if (decision.contentFingerprint !== undefined) {
+            summary.contentFingerprint = decision.contentFingerprint;
+            changed = true;
+          }
+          if (decision.stale) stale++;
+          if (changed) {
+            carried++;
+            if (!dry) writeFileSync(summaryPath, JSON.stringify(summary, null, 2) + '\n');
+          }
+        }
+      }
+    }
+  }
+  return { carried, stale };
+}
+
+async function refingerprintCommand(experimentArgs: string[], options: { dry?: boolean }) {
+  const { experimentsDir, evalsDir, resultsDir } = resolveProjectDirs();
+  const selectedFiles = selectExperimentFiles(experimentsDir, experimentArgs);
+  const { carried, stale } = await carryForwardConfigChanges(experimentsDir, evalsDir, resultsDir, selectedFiles, options.dry);
+  const verb = options.dry ? 'would carry forward' : 'carried forward';
+  console.log(chalk.green(`Refingerprint: ${verb} ${carried} config-only result(s).`));
+  if (stale > 0) {
+    console.log(chalk.yellow(`${stale} result(s) have a changed eval and were left stale — run them to refresh.`));
+  }
+}
+
+/** Run the chosen experiments: carry config-only changes forward, then run their
+ * new/changed evals (reuse handles the rest). Selection is explicit — there is no
+ * "run everything." */
+async function runSelected(
+  experimentArgs: string[],
+  options: { force?: boolean; smoke?: boolean; ackFailures?: boolean }
+): Promise<void> {
+  const { experimentsDir, evalsDir, resultsDir } = resolveProjectDirs();
+  const files = selectExperimentFiles(experimentsDir, experimentArgs);
+  if (files.length === 0) {
+    console.error(chalk.red(`No experiments matched: ${experimentArgs.join(', ')}`));
+    process.exit(1);
+  }
+  // Carry config-only changes forward first so a config edit (e.g. pinning a judge)
+  // doesn't make every eval look changed.
+  await carryForwardConfigChanges(experimentsDir, evalsDir, resultsDir, files);
+  await runAllCommand(experimentArgs, options);
+}
+
+/** Read one line from the user (interactive multi-select uses this). */
+function promptLine(question: string): Promise<string> {
+  return new Promise((res) => {
+    const rl = createInterface({ input: process.stdin, output: process.stdout });
+    rl.question(question, (ans) => {
+      rl.close();
+      res(ans.trim());
+    });
+  });
+}
+
+/** Numbered multi-select over experiment names. Returns the picked names. */
+async function pickExperiments(choices: string[]): Promise<string[]> {
+  console.log(chalk.bold('Pick experiments to run:'));
+  choices.forEach((c, i) => console.log(`  ${chalk.cyan(String(i + 1).padStart(2))}  ${c}`));
+  const ans = await promptLine(chalk.bold('\nNumbers (e.g. 1,3), "all", or Enter to skip: '));
+  if (!ans) return [];
+  if (ans.toLowerCase() === 'all') return choices;
+  const picked = new Set<string>();
+  for (const tok of ans.split(/[\s,]+/)) {
+    const n = Number(tok);
+    if (Number.isInteger(n) && n >= 1 && n <= choices.length) picked.add(choices[n - 1]);
+  }
+  return [...picked];
+}
+
 program
-  .command('run-all')
-  .description('Discover and run all experiments with fingerprint reuse and classification')
-  .argument('[experiments...]', 'Experiment names or glob patterns (default: all)')
-  .option('--dry', 'Preview what would run without executing')
+  .command('run')
+  .description('Run new/changed evals for the named experiment(s). You must name what to run')
+  .argument('<experiments...>', 'Experiment names or glob patterns')
   .option('--force', 'Ignore fingerprints, re-run everything')
   .option('--smoke', 'Run 1 eval per experiment for sanity checking')
   .option('--ack-failures', 'Keep non-model failures (infra/timeout) as final results instead of deleting them')
-  .action(runAllCommand);
+  .action(runSelected);
+
+program
+  .command('status')
+  .description('Show new/changed evals and the work to do, per experiment. Read-only')
+  .argument('[experiments...]', 'Experiment names or glob patterns (default: all)')
+  .option('--check', 'Exit non-zero if any new/changed eval is outstanding (for CI)')
+  .option('--json', 'Machine-readable output (for custom CI policy / ignore lists)')
+  .action(async (experimentArgs, options) => {
+    await statusCommand(experimentArgs, options);
+  });
+
+program
+  .command('refingerprint')
+  .description('(internal) Carry config-only changes forward in cached results; run by sync')
+  .argument('[experiments...]', 'Experiment names or glob patterns (default: all)')
+  .option('--dry', 'Preview without writing')
+  .action(refingerprintCommand);
 
 /**
- * Default command - run a single experiment, or run-all if no args given.
- * Usage:
- *   agent-eval           # runs all experiments (same as run-all)
- *   agent-eval cc        # runs single experiment
- *   agent-eval cc --dry  # preview single experiment
+ * Default command (bare `agent-eval`): show status, then — in a terminal — let the
+ * user multi-select which experiments to run. Never auto-runs everything. A config
+ * path/name still runs that single experiment (back-compat).
  */
 program
-  .argument('[config]', 'Experiment name (e.g., "cc") or path. Omit to run all experiments.')
-  .option('--dry', 'Preview what would run without executing')
+  .argument('[config]', 'Experiment name or path to run directly. Omit to show status + pick.')
+  .option('--dry', 'Preview a single experiment without executing')
   .option('--smoke', 'Run a single eval to verify setup (API keys, model IDs, sandbox)')
-  .option('--force', 'Ignore fingerprints, re-run everything (only applies when running all)')
+  .option('--force', 'Ignore fingerprints, re-run everything')
   .option('--ack-failures', 'Keep non-model failures (infra/timeout) as final results instead of deleting them')
   .action(async (configInput: string | undefined, options: { dry?: boolean; smoke?: boolean; force?: boolean; ackFailures?: boolean }) => {
-    if (!configInput) {
-      await runAllCommand([], options);
+    if (configInput) {
+      await runExperimentCommand(configInput, options);
       return;
     }
-    await runExperimentCommand(configInput, options);
+    const plan = await statusCommand([]);
+    if (plan.totalRun === 0) return;
+    if (!process.stdin.isTTY || !process.stdout.isTTY) return; // non-interactive (CI): status only
+    const choices = [...new Set(plan.rows.filter((r) => r.newEvals.length + r.changedEvals.length > 0).map((r) => r.baseName))];
+    const selected = await pickExperiments(choices);
+    if (selected.length === 0) {
+      console.log(chalk.gray('Nothing selected — run `agent-eval run <experiment...>` anytime.\n'));
+      return;
+    }
+    await runSelected(selected, options);
   });
 
 program.parse();

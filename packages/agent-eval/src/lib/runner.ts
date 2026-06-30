@@ -86,6 +86,8 @@ export interface RunExperimentOptions {
   experimentName: string;
   /** Per-eval fingerprints (eval name -> hash) for result reuse */
   fingerprints?: Record<string, string>;
+  /** Per-eval content fingerprints (eval name -> eval-files-only hash) */
+  contentFingerprints?: Record<string, string>;
   /** Callback for progress updates */
   onProgress?: (event: ProgressEvent) => void;
   /** Whether to run in verbose mode */
@@ -121,7 +123,7 @@ interface AttemptResult {
 export async function runExperiment(
   options: RunExperimentOptions
 ): Promise<ExperimentResults> {
-  const { config, fixtures, apiKey, resultsDir, experimentName, fingerprints, onProgress, smoke, rateLimiter } = options;
+  const { config, fixtures, apiKey, resultsDir, experimentName, fingerprints, contentFingerprints, onProgress, smoke, rateLimiter } = options;
   const startedAt = new Date();
 
   // Get the agent from registry
@@ -361,6 +363,7 @@ export async function runExperiment(
     resultsDir,
     experimentName,
     fingerprints,
+    contentFingerprints,
     smoke,
     fixturePaths,
   });
