@@ -121,6 +121,10 @@ export interface SaveResultsOptions {
 	experimentName: string;
 	/** Per-eval fingerprints (eval name -> fingerprint hash) */
 	fingerprints?: Record<string, string>;
+	/** Per-eval content fingerprints (eval name -> eval-files-only hash). Lets
+	 * refingerprinting carry forward config-only changes without masking a real
+	 * eval change, and lets staleness be detected against the eval content alone. */
+	contentFingerprints?: Record<string, string>;
 	/** Per-eval validity flags (eval name -> valid). Defaults to true. */
 	validity?: Record<string, boolean>;
 	/** Whether this is a smoke test run. Smoke results are excluded from reuse. */
@@ -165,6 +169,7 @@ export function saveResults(
 
 		// Save summary (simplified format per design)
 		const fingerprint = options.fingerprints?.[evalSummary.name];
+		const contentFingerprint = options.contentFingerprints?.[evalSummary.name];
 		const valid = options.validity?.[evalSummary.name];
 		const summaryForFile: Record<string, unknown> = {
 			totalRuns: evalSummary.totalRuns,
@@ -174,6 +179,9 @@ export function saveResults(
 		};
 		if (fingerprint) {
 			summaryForFile.fingerprint = fingerprint;
+		}
+		if (contentFingerprint) {
+			summaryForFile.contentFingerprint = contentFingerprint;
 		}
 		if (valid === false) {
 			summaryForFile.valid = false;
@@ -476,7 +484,7 @@ export interface ReusableResult {
  * Scan existing results for an experiment to find reusable eval results.
  *
  * A result is reusable if:
- * 1. Its fingerprint matches the current fingerprint
+ * 1. Its fingerprint matches the current fingerprint (fresh)
  * 2. It is "valid" (not marked as invalid by the classifier)
  * 3. It has passedRuns > 0 (successful result worth reusing)
  *
@@ -526,7 +534,9 @@ export function scanReusableResults(
 			try {
 				const summary = JSON.parse(readFileSync(summaryPath, 'utf-8'));
 
-				// Check fingerprint match
+				// Reuse only when fresh (fingerprint matches). A changed eval is left to
+				// re-run; "which staleness is acceptable" is the consumer's policy (via
+				// `agent-eval status --json` in CI), not the framework's.
 				if (summary.fingerprint !== expectedFingerprint) continue;
 
 				// Check validity (valid defaults to true if not explicitly set to false)

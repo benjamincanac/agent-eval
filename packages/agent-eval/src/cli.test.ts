@@ -1,9 +1,11 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { execSync } from 'child_process';
-import { mkdirSync, writeFileSync, rmSync, existsSync } from 'fs';
+import { mkdirSync, writeFileSync, readFileSync, rmSync, existsSync } from 'fs';
 import { join, resolve } from 'path';
 import { fileURLToPath } from 'url';
 import { dirname } from 'path';
+import { computeContentFingerprint, computeFingerprint } from './lib/fingerprint.js';
+import { loadConfig } from './lib/config.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -51,9 +53,9 @@ describe('CLI', () => {
   });
 
   describe('run command', () => {
-    it('shows error when config file does not exist', () => {
-      const result = runCli(['run', '/non/existent/config.ts']);
-      expect(result.stderr).toContain('not found');
+    it('shows error when the named experiment does not exist', () => {
+      const result = runCli(['run', 'no-such-experiment']);
+      expect(result.stderr.toLowerCase()).toMatch(/no experiments matched|required/);
       expect(result.exitCode).toBe(1);
     });
 
@@ -168,6 +170,166 @@ describe('CLI', () => {
       const result = runCli(['experiments/cc.ts'], projectDir);
       expect(result.stderr.toLowerCase()).toContain('error');
       expect(result.exitCode).toBe(1);
+    });
+  });
+
+  describe('refingerprint command', () => {
+    function setupProject(): { projectDir: string; evalPath: string; summaryPath: string } {
+      const projectDir = join(TEST_DIR, 'refp');
+      const experimentsDir = join(projectDir, 'experiments');
+      mkdirSync(experimentsDir, { recursive: true });
+      writeFileSync(join(experimentsDir, 'cc.ts'), `export default { agent: 'claude-code', model: 'opus' };`);
+      const evalDir = join(projectDir, 'evals', 'eval-1');
+      mkdirSync(evalDir, { recursive: true });
+      writeFileSync(join(evalDir, 'PROMPT.md'), 'do it');
+      writeFileSync(join(evalDir, 'EVAL.ts'), 'test code');
+      writeFileSync(join(evalDir, 'package.json'), '{"type":"module"}');
+      const summaryDir = join(projectDir, 'results', 'cc', '2026-01-01T00-00-00.000Z', 'eval-1');
+      mkdirSync(summaryDir, { recursive: true });
+      return { projectDir, evalPath: evalDir, summaryPath: join(summaryDir, 'summary.json') };
+    }
+
+    it('carries forward a config-only change but never masks a content change', () => {
+      const { projectDir, evalPath, summaryPath } = setupProject();
+      const currentContent = computeContentFingerprint(evalPath);
+
+      // Config-only change: stored content fp matches current, combined is stale.
+      writeFileSync(
+        summaryPath,
+        JSON.stringify({
+          totalRuns: 1, passedRuns: 1, passRate: '100%', meanDuration: 1,
+          fingerprint: 'STALE_COMBINED', contentFingerprint: currentContent,
+        })
+      );
+      let r = runCli(['refingerprint'], projectDir);
+      expect(r.exitCode).toBe(0);
+      let summary = JSON.parse(readFileSync(summaryPath, 'utf-8'));
+      expect(summary.fingerprint).not.toBe('STALE_COMBINED'); // carried forward
+      expect(summary.fingerprint).toMatch(/^[a-f0-9]{64}$/);
+      expect(summary.contentFingerprint).toBe(currentContent); // content untouched
+
+      // Content change: stored content fp differs → must be left stale, NOT masked.
+      writeFileSync(
+        summaryPath,
+        JSON.stringify({
+          totalRuns: 1, passedRuns: 1, passRate: '100%', meanDuration: 1,
+          fingerprint: 'OLD_COMBINED', contentFingerprint: 'OLD_CONTENT',
+        })
+      );
+      r = runCli(['refingerprint'], projectDir);
+      expect(r.exitCode).toBe(0);
+      summary = JSON.parse(readFileSync(summaryPath, 'utf-8'));
+      expect(summary.fingerprint).toBe('OLD_COMBINED'); // NOT re-stamped
+      expect(summary.contentFingerprint).toBe('OLD_CONTENT');
+    });
+
+    it('--dry does not write', () => {
+      const { projectDir, evalPath, summaryPath } = setupProject();
+      const currentContent = computeContentFingerprint(evalPath);
+      writeFileSync(
+        summaryPath,
+        JSON.stringify({
+          totalRuns: 1, passedRuns: 1, passRate: '100%', meanDuration: 1,
+          fingerprint: 'STALE_COMBINED', contentFingerprint: currentContent,
+        })
+      );
+      const r = runCli(['refingerprint', '--dry'], projectDir);
+      expect(r.exitCode).toBe(0);
+      const summary = JSON.parse(readFileSync(summaryPath, 'utf-8'));
+      expect(summary.fingerprint).toBe('STALE_COMBINED'); // unchanged under --dry
+    });
+  });
+
+  describe('staleness flow (status / refingerprint / --check / --json)', () => {
+    it('fresh → change → status + --check + --json flag it; refingerprint stays honest; a rerun clears it', async () => {
+      const projectDir = join(TEST_DIR, 'flow');
+      const experimentsDir = join(projectDir, 'experiments');
+      mkdirSync(experimentsDir, { recursive: true });
+      writeFileSync(join(experimentsDir, 'cc.ts'), `export default { agent: 'claude-code', model: 'opus' };`);
+      const evalDir = join(projectDir, 'evals', 'eval-1');
+      mkdirSync(evalDir, { recursive: true });
+      writeFileSync(join(evalDir, 'PROMPT.md'), 'do it');
+      writeFileSync(join(evalDir, 'EVAL.ts'), 'v1');
+      writeFileSync(join(evalDir, 'package.json'), '{"type":"module"}');
+      const summaryPath = join(projectDir, 'results', 'cc', '2026-01-01T00-00-00.000Z', 'eval-1', 'summary.json');
+      mkdirSync(dirname(summaryPath), { recursive: true });
+
+      const config = await loadConfig(join(experimentsDir, 'cc.ts'));
+      const modelConfig = { ...config, model: Array.isArray(config.model) ? config.model[0] : config.model };
+      const seedFresh = () =>
+        writeFileSync(
+          summaryPath,
+          JSON.stringify({
+            totalRuns: 1, passedRuns: 1, passRate: '100%', meanDuration: 1,
+            fingerprint: computeFingerprint(evalDir, modelConfig as never),
+            contentFingerprint: computeContentFingerprint(evalDir),
+          })
+        );
+
+      // 1. Fresh → status clean, --check passes.
+      seedFresh();
+      expect(runCli(['status'], projectDir).stdout).toContain('up to date');
+      expect(runCli(['status', '--check'], projectDir).exitCode).toBe(0);
+
+      // 2. Eval content changes → status flags it, --check fails, --json reports it.
+      writeFileSync(join(evalDir, 'EVAL.ts'), 'v2');
+      const s = runCli(['status'], projectDir).stdout;
+      expect(s).toContain('changed');
+      expect(s).toContain('eval-1');
+      expect(runCli(['status', '--check'], projectDir).exitCode).toBe(1);
+      const json = JSON.parse(runCli(['status', '--json'], projectDir).stdout);
+      expect(json.work).toEqual([{ experiment: 'cc', new: [], changed: ['eval-1'] }]);
+
+      // 3. refingerprint must NOT mask a content change — still failing.
+      runCli(['refingerprint'], projectDir);
+      expect(runCli(['status', '--check'], projectDir).exitCode).toBe(1);
+
+      // 4. A rerun (simulated by re-seeding fresh for the new content) clears it.
+      seedFresh();
+      expect(runCli(['status', '--check'], projectDir).exitCode).toBe(0);
+    });
+
+    it('status reports new and changed evals as the work to do', async () => {
+      const projectDir = join(TEST_DIR, 'status');
+      const experimentsDir = join(projectDir, 'experiments');
+      mkdirSync(experimentsDir, { recursive: true });
+      writeFileSync(join(experimentsDir, 'cc.ts'), `export default { agent: 'claude-code', model: 'opus' };`);
+      const evalDir = join(projectDir, 'evals', 'eval-1');
+      mkdirSync(evalDir, { recursive: true });
+      writeFileSync(join(evalDir, 'PROMPT.md'), 'do it');
+      writeFileSync(join(evalDir, 'EVAL.ts'), 'v1');
+      writeFileSync(join(evalDir, 'package.json'), '{"type":"module"}');
+
+      const config = await loadConfig(join(experimentsDir, 'cc.ts'));
+      const modelConfig = { ...config, model: Array.isArray(config.model) ? config.model[0] : config.model };
+      const sp = join(projectDir, 'results', 'cc', '2026-01-01T00-00-00.000Z', 'eval-1', 'summary.json');
+      mkdirSync(dirname(sp), { recursive: true });
+      writeFileSync(
+        sp,
+        JSON.stringify({
+          totalRuns: 1, passedRuns: 1, passRate: '100%', meanDuration: 1,
+          fingerprint: computeFingerprint(evalDir, modelConfig as never),
+          contentFingerprint: computeContentFingerprint(evalDir),
+        })
+      );
+
+      // Up to date.
+      expect(runCli(['status'], projectDir).stdout).toContain('up to date');
+
+      // Add a NEW eval (no result) + CHANGE the existing one.
+      const evalDir2 = join(projectDir, 'evals', 'eval-2');
+      mkdirSync(evalDir2, { recursive: true });
+      writeFileSync(join(evalDir2, 'PROMPT.md'), 'do it');
+      writeFileSync(join(evalDir2, 'EVAL.ts'), 'x');
+      writeFileSync(join(evalDir2, 'package.json'), '{"type":"module"}');
+      writeFileSync(join(evalDir, 'EVAL.ts'), 'v2');
+
+      const out = runCli(['status'], projectDir).stdout;
+      expect(out).toContain('new'); // eval-2
+      expect(out).toContain('eval-2');
+      expect(out).toContain('changed'); // eval-1
+      expect(out).toContain('eval-1');
+      expect(out).toContain('to run');
     });
   });
 });
