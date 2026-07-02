@@ -49,7 +49,7 @@ With no arguments, the CLI discovers every `experiments/*.ts` file and runs them
 npx @vercel/agent-eval cc
 ```
 
-The argument is the experiment filename without `.ts`. This resolves to `experiments/cc.ts`. Running a single experiment uses the exact same fingerprinting, result storage, and reuse logic as running all of them — it's just run-all filtered to one name. So results produced by `agent-eval cc` are reused on the next `agent-eval` (run-all), and vice versa.
+The argument is the experiment filename without `.ts`. This resolves to `experiments/cc.ts`. A single experiment uses the same fingerprinting and result reuse as a full run: single-model results land in `results/cc/<timestamp>/` with a fingerprint, so evals produced by `agent-eval cc` are reused on later runs instead of being re-run.
 
 ### Flags
 
@@ -163,6 +163,62 @@ The `results.o11y` object is a `TranscriptSummary` with these fields:
 
 > **Note**: If the agent's transcript is unavailable (e.g. the agent crashed before producing output), `results.o11y` will be `null`.
 
+### Agentic LLM judge
+
+For open-ended quality checks that exact assertions can't express, EVAL.ts can run an **agentic LLM judge**. Each judge assertion re-invokes the *same agent* that did the codegen, **in the same sandbox**, to evaluate a criterion — then returns pass/fail. No fresh sandbox, no copying evidence around.
+
+```typescript
+import { test, expect } from 'vitest';
+import { environment, transcript } from '@vercel/agent-eval/eval';
+
+// Judge the final state: the agent explores the project (read/grep/run) for evidence.
+test('uses server components', async () => {
+  await expect(environment).toSatisfyCriterion('uses Server Components for the product list');
+});
+
+// Judge the transcript: how the agent worked. It reads the transcript by path, so the
+// full transcript is never stuffed into a prompt.
+test('diagnosed properly', async () => {
+  await expect(transcript).toSatisfyCriterion('diagnosed with DevTools, not trial-and-error edits');
+});
+
+// Numeric: the judge scores 0-1; assert a threshold (still pass/fail overall).
+test('quality bar', async () => {
+  await expect(environment).toScoreAtLeast('production-quality error handling', 0.8);
+});
+```
+
+Two subjects, imported from `@vercel/agent-eval/eval` — no paths, the subject is implicit:
+
+- `environment` — the judge agent explores the final sandbox state (cwd) with its own tools.
+- `transcript` — the judge agent reads the materialized transcript by path.
+
+Two matchers, on either subject:
+
+- `toSatisfyCriterion(criterion)` — passes when the judge decides the criterion is satisfied.
+- `toScoreAtLeast(criterion, threshold)` — passes when the judge's 0–1 score is `>= threshold`.
+
+You supply only the **criterion** string; the framework owns the judge prompt and the verdict contract. On failure the assertion message carries the judge's reasoning, e.g. `[judge:environment] FAIL (score 0.42): product list is a Client Component`, so a failed judge clause is distinguishable from a failed deterministic test or a crash.
+
+By default the judge uses the **same agent and model** as the run under test (self-grading). Because each assertion is a real agent run, it costs time and tokens — keep criteria focused.
+
+**Pin the judge** to grade every run with one fixed agent + model — the apples-to-apples choice when comparing models, since the judge quality no longer varies with the model under test (and a model never grades itself):
+
+```typescript
+const config: ExperimentConfig = {
+  agent: 'codex',
+  model: 'gpt-5.4',
+  // Grade with a fixed Claude judge regardless of the model under test.
+  judge: { agent: 'vercel-ai-gateway/claude-code', model: 'claude-opus-4-8' },
+};
+```
+
+- `judge.model` is required (pinning the model is the point).
+- `judge.agent` is optional and defaults to the codegen agent — omit it to keep the same harness and only pin the model. When it names a different agent, that agent's CLI is installed in the sandbox automatically and its key is resolved from its own env var (falling back to `VERCEL_OIDC_TOKEN`).
+- Pinning changes the eval fingerprint, so a pinned run won't reuse self-graded cached results.
+
+> **Note**: requires `validation: 'vitest'` (the default). The framework gives the eval process the run's credentials automatically so the judge can call the agent CLI in-sandbox.
+
 ## Configuration Reference
 
 ### Experiment config
@@ -238,6 +294,10 @@ const config: ExperimentConfig = {
   // 'changed' - copy only files modified by the agent
   // 'all' - copy the entire project including original fixture files
   copyFiles: 'changed',
+
+  // Pin the agentic LLM judge (see "Agentic LLM judge" above). Omit to self-grade
+  // with the codegen agent+model. `model` required; `agent` defaults to codegen.
+  judge: { agent: 'vercel-ai-gateway/claude-code', model: 'claude-opus-4-8' },
 };
 
 export default config;
@@ -482,6 +542,54 @@ On subsequent runs, evals with a matching fingerprint and a valid cached result 
 Reuse works regardless of how results were stored on disk: both the single-model layout (`results/<experiment>/<timestamp>/`) and the model-nested layout (`results/<experiment>/<model>/<timestamp>/`) are scanned, so legacy results are picked up without a manual backfill.
 
 Use `--force` to bypass fingerprinting and re-run everything. Functions like `setup` and `editPrompt` cannot be hashed, so use `--force` when you change those.
+
+Each result also stores a `contentFingerprint` — a hash of the eval files **only**, independent of config. This separates "the eval itself changed" from "a config field changed."
+
+### Carrying forward config-only changes
+
+A benign config change (e.g. bumping `timeout`) changes the combined fingerprint and would otherwise re-run every eval. `agent-eval refingerprint` carries those forward in the cached results **without masking a real eval change**:
+
+```bash
+agent-eval refingerprint            # all experiments
+agent-eval refingerprint cc --dry   # preview one experiment
+```
+
+For each cached result it compares the eval's current `contentFingerprint` to the stored one: if the content is unchanged it re-stamps the combined fingerprint (the result stays cached); if the content **changed** it leaves the result stale so it re-runs. `agent-eval status` already classifies by eval *content*, so it never reports a config-only change as work — run `refingerprint` after editing an experiment config to carry that change into the cache (`run` does this automatically).
+
+### After changing or syncing evals: status → pick what to run
+
+Run `agent-eval` with no arguments. It shows the work, then — in a terminal — lets you multi-select which experiments to run. It never re-runs everything:
+
+```bash
+agent-eval
+```
+```
+Evals needing work:
+  new      agent-026-no-serial-await
+  changed  agent-024-avoid-redundant-usestate
+
+Work to do — 6 run(s) across 3 experiment(s):
+  claude-opus-4.6      2 to run  (22 up to date)
+  ...
+
+Pick experiments to run:
+   1  claude-opus-4.6
+   2  claude-sonnet-4.6
+Numbers (e.g. 1,3), "all", or Enter to skip:
+```
+
+Status classifies each eval by **content**, so a benign config change (e.g. pinning a judge) is never reported as work. The same building blocks work non-interactively:
+
+```bash
+agent-eval status                  # read-only: what's new/changed, per experiment
+agent-eval status --check          # exit non-zero if anything is new/changed (simple CI gate)
+agent-eval status --json           # machine-readable, for custom CI policy
+agent-eval run claude-sonnet-4.6   # run the named experiment(s) — new/changed evals only
+```
+
+**Accepting staleness is the consumer's call, not the framework's.** `agent-eval` only *reports* — it has no `keep`/`acknowledge`. If you want to leave some experiments on an older eval while keeping others fresh, do that in your own CI: read `agent-eval status --json` (per-experiment `new`/`changed`) and fail only on experiments not in your accepted-stale list. (See next-evals-oss's `scripts/check-stale.mjs` for an example.)
+
+> `refingerprint` (carry config-only changes forward) runs automatically inside `run`; your sync script should call `agent-eval refingerprint` after pulling evals so committed results pick up benign config changes without re-running.
 
 ## Failure Classification
 

@@ -6,18 +6,21 @@
 
 import { Command } from 'commander';
 import { config as dotenvConfig } from 'dotenv';
-import { resolve, dirname, basename } from 'path';
-import { existsSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'fs';
+import { resolve, dirname, basename, join } from 'path';
+import { existsSync, readFileSync, readdirSync, rmSync, writeFileSync, statSync } from 'fs';
+import { createInterface } from 'node:readline';
 import { fileURLToPath } from 'url';
 import chalk from 'chalk';
 import { loadConfig, resolveEvalNames } from './lib/config.js';
 import { loadAllFixtures } from './lib/fixture.js';
 import { runExperiment, StartRateLimiter } from './lib/runner.js';
 import { Dashboard, createConsoleProgressHandler } from './lib/dashboard.js';
-import type { ProgressEvent, Classification, ResolvedExperimentConfig, EvalFixture } from './lib/types.js';
+import type { ProgressEvent, Classification } from './lib/types.js';
 import { initProject, getPostInitInstructions } from './lib/init.js';
 import { getAgent } from './lib/agents/index.js';
-import { computeFingerprint } from './lib/fingerprint.js';
+import { resolveAgentApiKey } from './lib/agents/shared.js';
+import { getSandboxBackendInfo } from './lib/sandbox.js';
+import { computeFingerprint, computeContentFingerprint, decideRefingerprint } from './lib/fingerprint.js';
 import { scanReusableResults } from './lib/results.js';
 import { isClassifierEnabled, classifyFailure } from './lib/classifier.js';
 import { housekeep } from './lib/housekeeping.js';
@@ -40,6 +43,211 @@ program
   .name('@vercel/agent-eval')
   .description('Framework for testing AI coding agents in isolated sandboxes')
   .version(pkg.version);
+
+/**
+ * Resolve config path shorthand.
+ * - "cc" -> "experiments/cc.ts"
+ * - "experiments/cc.ts" -> "experiments/cc.ts" (unchanged)
+ */
+function resolveConfigPath(input: string): string {
+  // If it already has a path separator or extension, use as-is
+  if (input.includes('/') || input.includes('\\') || input.endsWith('.ts') || input.endsWith('.js')) {
+    return input;
+  }
+  // Otherwise, treat as shorthand: "cc" -> "experiments/cc.ts"
+  return `experiments/${input}.ts`;
+}
+
+/**
+ * Run experiment command handler
+ */
+async function runExperimentCommand(configInput: string, options: { dry?: boolean; smoke?: boolean; force?: boolean }) {
+  try {
+    const configPath = resolveConfigPath(configInput);
+    const absoluteConfigPath = resolve(process.cwd(), configPath);
+
+    if (!existsSync(absoluteConfigPath)) {
+      console.error(chalk.red(`Config file not found: ${absoluteConfigPath}`));
+      process.exit(1);
+    }
+
+    console.log(chalk.blue(`Loading config from ${configPath}...`));
+    const config = await loadConfig(absoluteConfigPath);
+
+    // Discover evals - infer from config file location
+    // Config at project/experiments/foo.ts -> evals at project/evals/
+    const projectDir = dirname(dirname(absoluteConfigPath));
+    const evalsDir = resolve(projectDir, 'evals');
+    if (!existsSync(evalsDir)) {
+      console.error(chalk.red(`Evals directory not found: ${evalsDir}`));
+      console.error(chalk.gray(`Expected evals/ to be sibling to experiments/ directory`));
+      process.exit(1);
+    }
+
+    console.log(chalk.blue(`Discovering evals in ${evalsDir}...`));
+    const { fixtures, errors } = loadAllFixtures(evalsDir, {
+      validation: config.validation,
+    });
+
+    if (errors.length > 0) {
+      console.log(chalk.yellow(`\nWarning: ${errors.length} invalid fixture(s):`));
+      for (const error of errors) {
+        console.log(chalk.yellow(`  - ${error.fixtureName}: ${error.message}`));
+      }
+    }
+
+    if (fixtures.length === 0) {
+      console.error(chalk.red('No valid eval fixtures found'));
+      process.exit(1);
+    }
+
+    // Resolve which evals to run
+    const availableNames = fixtures.map((f) => f.name);
+    const evalNames = resolveEvalNames(config.evals, availableNames);
+
+    if (evalNames.length === 0) {
+      console.error(chalk.red('No evals matched the filter'));
+      process.exit(1);
+    }
+
+    // Smoke mode: pick first eval alphabetically, override runs to 1
+    const smokeEvalNames = options.smoke ? [evalNames.sort()[0]] : evalNames;
+    const smokeRuns = options.smoke ? 1 : config.runs;
+
+    if (options.smoke) {
+      console.log(chalk.yellow(`\n[SMOKE TEST] Running 1 eval to verify setup: ${smokeEvalNames[0]}`));
+    } else {
+      console.log(chalk.green(`\nFound ${fixtures.length} valid fixture(s), will run ${evalNames.length}:`));
+      for (const name of evalNames) {
+        console.log(chalk.green(`  - ${name}`));
+      }
+    }
+
+	const models = Array.isArray(config.model) ? config.model : [config.model];
+
+    // Show info for all models
+    const totalRunsPerModel = smokeEvalNames.length * smokeRuns;
+    const totalRuns = totalRunsPerModel * models.length;
+
+    if (models.length > 1) {
+      console.log(chalk.blue(`\nRunning ${smokeEvalNames.length} eval(s) x ${smokeRuns} run(s) x ${models.length} model(s) = ${totalRuns} total runs`));
+      console.log(chalk.blue(`Agent: ${config.agent}, Models: ${models.join(', ')}, Timeout: ${config.timeout}s, Early Exit: ${config.earlyExit}`));
+    } else {
+      console.log(chalk.blue(`\nRunning ${smokeEvalNames.length} eval(s) x ${smokeRuns} run(s) = ${totalRuns} total runs`));
+      console.log(chalk.blue(`Agent: ${config.agent}, Model: ${models[0]}, Timeout: ${config.timeout}s, Early Exit: ${config.earlyExit}`));
+    }
+
+    // Show which sandbox backend will be used
+    const sandboxInfo = getSandboxBackendInfo({ backend: config.sandbox });
+    console.log(chalk.blue(`Sandbox: ${sandboxInfo.description}`));
+
+    if (options.dry) {
+      console.log(chalk.yellow('\n[DRY RUN] Would execute evals here'));
+      return;
+    }
+
+    // Get the agent to check for required API key
+    const agent = getAgent(config.agent);
+    const apiKeyEnvVar = agent.getApiKeyEnvVar();
+    const apiKey = resolveAgentApiKey(agent.getApiKeyEnvVar);
+    if (!apiKey) {
+      console.error(chalk.red(`${apiKeyEnvVar} (or VERCEL_OIDC_TOKEN) environment variable is required`));
+      console.error(chalk.gray(`Get your API key at: https://vercel.com/dashboard -> AI Gateway`));
+      process.exit(1);
+    }
+
+    // Filter fixtures to only the ones we want to run
+    const selectedFixtures = fixtures.filter((f) => smokeEvalNames.includes(f.name));
+
+    // Get experiment name from config file
+    const baseExperimentName = basename(configPath, '.ts').replace(/\.js$/, '');
+    const resultsDir = resolve(process.cwd(), 'results');
+
+    console.log(chalk.blue('\nStarting experiment...'));
+
+    // Run experiments for each model
+    let allPassed = true;
+    for (const model of models) {
+      // Create a config for this specific model (with smoke overrides if applicable)
+      const modelConfig = { ...config, model, runs: smokeRuns };
+
+      // Only nest results under the model when there's more than one, so single-model
+      // results land at results/<name>/<ts>/ — the same layout run-all reads from,
+      // instead of the previously orphaned results/<name>/<model>/<ts>/.
+      const experimentName = models.length > 1
+        ? `${baseExperimentName}/${model}`
+        : baseExperimentName;
+
+      if (models.length > 1) {
+        console.log(chalk.blue(`\n--- Running with model: ${model} ---`));
+      }
+
+      // Fingerprint each eval so its result is reusable on later runs, and skip
+      // evals that already have a fresh cached result (same as the run-all path).
+      const fingerprints: Record<string, string> = {};
+      const contentFingerprints: Record<string, string> = {};
+      for (const fixture of selectedFixtures) {
+        fingerprints[fixture.name] = computeFingerprint(fixture.path, modelConfig);
+        contentFingerprints[fixture.name] = computeContentFingerprint(fixture.path);
+      }
+
+      let fixturesToRun = selectedFixtures;
+      if (!options.force && !options.smoke) {
+        const reusable = scanReusableResults(resultsDir, experimentName, fingerprints);
+        if (reusable.size > 0) {
+          fixturesToRun = selectedFixtures.filter((f) => !reusable.has(f.name));
+        }
+      }
+
+      if (fixturesToRun.length > 0) {
+        // Run the experiment
+        const results = await runExperiment({
+          config: modelConfig,
+          fixtures: fixturesToRun,
+          apiKey,
+          resultsDir,
+          experimentName,
+          fingerprints,
+          contentFingerprints,
+          smoke: options.smoke,
+          onProgress: createConsoleProgressHandler({
+            experimentName,
+            model,
+            agent: config.agent,
+          }),
+        });
+
+        // Smoke results aren't reused, so judge pass/fail from what just ran.
+        if (options.smoke && !results.evals.every((e) => e.passedRuns === e.totalRuns)) {
+          allPassed = false;
+        }
+      } else {
+        console.log(chalk.gray(`All ${selectedFixtures.length} eval(s) cached for ${experimentName}, nothing to run.`));
+      }
+
+      // For real runs, judge pass/fail from cached + fresh results together so a
+      // cached failure still counts (mirrors the run-all path).
+      if (!options.smoke) {
+        const finalReusable = scanReusableResults(resultsDir, experimentName, fingerprints);
+        const experimentPassed = selectedFixtures.every((f) => {
+          const r = finalReusable.get(f.name);
+          return r != null && r.passRate !== '0%';
+        });
+        if (!experimentPassed) allPassed = false;
+      }
+    }
+
+    // Exit with appropriate code
+    process.exit(allPassed ? 0 : 1);
+  } catch (error) {
+    if (error instanceof Error) {
+      console.error(chalk.red(`Error: ${error.message}`));
+    } else {
+      console.error(chalk.red('An unknown error occurred'));
+    }
+    process.exit(1);
+  }
+}
 
 /**
  * init command - Create a new eval project
@@ -107,62 +315,6 @@ program
   });
 
 /**
- * Normalize an experiment argument to a bare experiment name.
- * Accepts "cc", "cc*" (glob), and path-style "experiments/cc.ts".
- */
-function normalizeExperimentArg(arg: string): string {
-  return basename(arg).replace(/\.(ts|js)$/, '');
-}
-
-type ExperimentPlan =
-  | { ok: true; config: ResolvedExperimentConfig; fixtures: EvalFixture[]; evalNames: string[] }
-  | { ok: false; reason: 'config' | 'fixtures' };
-
-/**
- * Load an experiment config and the eval fixtures visible to it. Fixtures are
- * loaded per experiment because validation is a config field (`validation:
- * 'none'` makes EVAL.ts optional). Logs and returns `ok: false` on failure;
- * the caller decides how that affects the exit code.
- */
-async function loadExperimentPlan(
-  file: string,
-  experimentsDir: string,
-  evalsDir: string,
-  smoke: boolean | undefined,
-): Promise<ExperimentPlan> {
-  let config: ResolvedExperimentConfig;
-  try {
-    config = await loadConfig(resolve(experimentsDir, file));
-  } catch (err) {
-    console.error(chalk.red(`Failed to load ${file}: ${err instanceof Error ? err.message : err}`));
-    return { ok: false, reason: 'config' };
-  }
-
-  const { fixtures, errors } = loadAllFixtures(evalsDir, { validation: config.validation });
-  if (errors.length > 0) {
-    console.log(chalk.yellow(`Warning: ${errors.length} invalid fixture(s) for ${file}`));
-  }
-  if (fixtures.length === 0) {
-    console.error(chalk.red(`No valid eval fixtures found for ${file}`));
-    return { ok: false, reason: 'fixtures' };
-  }
-
-  const availableNames = fixtures.map((f) => f.name);
-  let evalNames: string[];
-  try {
-    evalNames = resolveEvalNames(config.evals, availableNames);
-  } catch {
-    evalNames = availableNames;
-  }
-
-  if (smoke) {
-    evalNames = [evalNames.sort()[0]];
-  }
-
-  return { ok: true, config, fixtures, evalNames };
-}
-
-/**
  * Run-all handler: discover and run all experiments with fingerprint reuse
  * and classification. Used by both `run-all` subcommand and the default
  * (no-args) invocation.
@@ -188,16 +340,12 @@ async function runAllCommand(experimentArgs: string[], options: { dry?: boolean;
         .filter((f) => f.endsWith('.ts') && !f.startsWith('_temp_'))
         .sort();
 
-      // Filter by args if provided. Experiments named explicitly must be
-      // runnable: failures to load or skips fail the exit code, where a
-      // no-args sweep just runs whatever it can.
-      const explicit = experimentArgs.length > 0;
+      // Filter by args if provided
       let selectedFiles: string[];
-      if (explicit) {
-        const wantedNames = experimentArgs.map(normalizeExperimentArg);
+      if (experimentArgs.length > 0) {
         selectedFiles = allExperimentFiles.filter((f) => {
           const name = f.replace(/\.ts$/, '');
-          return wantedNames.some((arg) =>
+          return experimentArgs.some((arg) =>
             arg.includes('*') ? minimatch(name, arg) : name === arg
           );
         });
@@ -215,84 +363,16 @@ async function runAllCommand(experimentArgs: string[], options: { dry?: boolean;
         console.log(chalk.blue(`  - ${f.replace(/\.ts$/, '')}`));
       }
 
-      // --- Dry run: collect info and print a single summary table ---
-      if (options.dry) {
-        interface DryRunInfo { name: string; toRun: string[]; cached: number; total: number }
-        const dryResults: DryRunInfo[] = [];
-        let hadErrors = false;
-
-        for (const file of selectedFiles) {
-          const baseExperimentName = file.replace(/\.ts$/, '');
-
-          const plan = await loadExperimentPlan(file, experimentsDir, evalsDir, options.smoke);
-          if (!plan.ok) {
-            if (explicit || plan.reason === 'fixtures') hadErrors = true;
-            continue;
-          }
-          const { config, fixtures, evalNames } = plan;
-
-          const models = Array.isArray(config.model) ? config.model : [config.model];
-
-          for (const model of models) {
-            const experimentName = models.length > 1
-              ? `${baseExperimentName}/${model}`
-              : baseExperimentName;
-
-            const modelConfig = { ...config, model, runs: options.smoke ? 1 : config.runs };
-            const selectedFixtures = fixtures.filter((f) => evalNames.includes(f.name));
-            const fingerprints: Record<string, string> = {};
-            for (const fixture of selectedFixtures) {
-              fingerprints[fixture.name] = computeFingerprint(fixture.path, modelConfig);
-            }
-
-            let fixturesToRun = selectedFixtures;
-            if (!options.force && !options.smoke) {
-              const reusable = scanReusableResults(resultsDir, experimentName, fingerprints);
-              if (reusable.size > 0) {
-                fixturesToRun = selectedFixtures.filter((f) => !reusable.has(f.name));
-              }
-            }
-
-            dryResults.push({
-              name: experimentName,
-              toRun: fixturesToRun.map((f) => f.name),
-              cached: selectedFixtures.length - fixturesToRun.length,
-              total: selectedFixtures.length,
-            });
-          }
-        }
-
-        // Print summary
-        const totalToRun = dryResults.reduce((sum, d) => sum + d.toRun.length, 0);
-        const totalCached = dryResults.reduce((sum, d) => sum + d.cached, 0);
-
-        console.log('');
-        if (dryResults.length === 0) {
-          // Nothing loadable; errors were already printed above.
-        } else if (totalToRun === 0) {
-          console.log(chalk.green(`  All ${totalCached} evals cached across ${dryResults.length} experiments. Nothing to run.`));
-        } else {
-          const nameWidth = Math.max(...dryResults.map((d) => d.name.length)) + 2;
-          console.log(chalk.bold(`  ${totalToRun} evals to run, ${totalCached} cached\n`));
-          for (const d of dryResults) {
-            const label = d.name.padEnd(nameWidth);
-            if (d.toRun.length === 0) {
-              console.log(chalk.gray(`  ${label} ${d.total} cached`));
-            } else {
-              console.log(
-                chalk.white(`  ${label}`) +
-                chalk.blue(` ${d.toRun.length} to run`) +
-                (d.cached > 0 ? chalk.gray(`, ${d.cached} cached`) : '')
-              );
-              for (const name of d.toRun) {
-                console.log(chalk.green(`  ${' '.repeat(nameWidth)} → ${name}`));
-              }
-            }
-          }
-        }
-        console.log('');
-        process.exit(hadErrors ? 1 : 0);
+      // Load all fixtures
+      const { fixtures, errors } = loadAllFixtures(evalsDir);
+      if (errors.length > 0) {
+        console.log(chalk.yellow(`\nWarning: ${errors.length} invalid fixture(s)`));
       }
+      if (fixtures.length === 0) {
+        console.error(chalk.red('No valid eval fixtures found'));
+        process.exit(1);
+      }
+
 
       // --- Live run ---
       const useDashboard = process.stdout.isTTY && selectedFiles.length > 1;
@@ -319,23 +399,35 @@ async function runAllCommand(experimentArgs: string[], options: { dry?: boolean;
 
       let allPassed = true;
       const experimentPromises = selectedFiles.map(async (file) => {
+        const configPath = resolve(experimentsDir, file);
         const baseExperimentName = file.replace(/\.ts$/, '');
 
-        const plan = await loadExperimentPlan(file, experimentsDir, evalsDir, options.smoke);
-        if (!plan.ok) {
-          if (explicit || plan.reason === 'fixtures') allPassed = false;
+        let config;
+        try {
+          config = await loadConfig(configPath);
+        } catch (err) {
+          console.error(chalk.red(`Failed to load ${file}: ${err instanceof Error ? err.message : err}`));
           return;
         }
-        const { config, fixtures, evalNames } = plan;
 
         const models = Array.isArray(config.model) ? config.model : [config.model];
+        const availableNames = fixtures.map((f) => f.name);
+        let evalNames: string[];
+        try {
+          evalNames = resolveEvalNames(config.evals, availableNames);
+        } catch {
+          evalNames = availableNames;
+        }
+
+        if (options.smoke) {
+          evalNames = [evalNames.sort()[0]];
+        }
 
         const agent = getAgent(config.agent);
         const apiKeyEnvVar = agent.getApiKeyEnvVar();
-        const apiKey = process.env[apiKeyEnvVar] ?? process.env.VERCEL_OIDC_TOKEN;
+        const apiKey = resolveAgentApiKey(agent.getApiKeyEnvVar);
         if (!apiKey) {
           console.error(chalk.red(`${apiKeyEnvVar} (or VERCEL_OIDC_TOKEN) not set, skipping ${baseExperimentName}`));
-          if (explicit) allPassed = false;
           return;
         }
 
@@ -352,13 +444,15 @@ async function runAllCommand(experimentArgs: string[], options: { dry?: boolean;
 
           const selectedFixtures = fixtures.filter((f) => evalNames.includes(f.name));
           const fingerprints: Record<string, string> = {};
+          const contentFingerprints: Record<string, string> = {};
           for (const fixture of selectedFixtures) {
             fingerprints[fixture.name] = computeFingerprint(fixture.path, modelConfig);
+            contentFingerprints[fixture.name] = computeContentFingerprint(fixture.path);
           }
 
           const classifierOn = isClassifierEnabled();
 
-          // Scan for reusable results
+          // Scan for reusable (fresh) results.
           let fixturesToRun = selectedFixtures;
           if (!options.force && !options.smoke) {
             const reusable = scanReusableResults(resultsDir, experimentName, fingerprints);
@@ -390,6 +484,7 @@ async function runAllCommand(experimentArgs: string[], options: { dry?: boolean;
                 resultsDir,
                 experimentName,
                 fingerprints,
+                contentFingerprints,
                 smoke: options.smoke,
                 onProgress,
                 rateLimiter,
@@ -547,38 +642,358 @@ async function runAllCommand(experimentArgs: string[], options: { dry?: boolean;
 }
 
 /**
- * run-all subcommand (explicit)
+ * Resolve and validate the standard project layout (experiments/, evals/, results/).
+ * Shared by `status`, `run`, and `refingerprint`.
  */
+function resolveProjectDirs(): { experimentsDir: string; evalsDir: string; resultsDir: string } {
+  const projectDir = process.cwd();
+  const experimentsDir = resolve(projectDir, 'experiments');
+  const evalsDir = resolve(projectDir, 'evals');
+  const resultsDir = resolve(projectDir, 'results');
+  if (!existsSync(experimentsDir) || !existsSync(resultsDir)) {
+    console.error(chalk.red('experiments/ and results/ directories are required'));
+    process.exit(1);
+  }
+  return { experimentsDir, evalsDir, resultsDir };
+}
+
+/** Select experiment config files, optionally filtered by name/glob args. */
+function selectExperimentFiles(experimentsDir: string, experimentArgs: string[]): string[] {
+  const allFiles = readdirSync(experimentsDir)
+    .filter((f) => f.endsWith('.ts') && !f.startsWith('_temp_'))
+    .sort();
+  return experimentArgs.length > 0
+    ? allFiles.filter((f) => {
+        const name = f.replace(/\.ts$/, '');
+        return experimentArgs.some((arg) => (arg.includes('*') ? minimatch(name, arg) : name === arg));
+      })
+    : allFiles;
+}
+
+/** The newest result summary for an (experiment, eval), or null if never run. */
+function findNewestSummary(experimentResultsDir: string, evalName: string): Record<string, unknown> | null {
+  if (!existsSync(experimentResultsDir)) return null;
+  const timestamps = readdirSync(experimentResultsDir)
+    .filter((t) => !t.startsWith('.'))
+    .sort()
+    .reverse();
+  for (const ts of timestamps) {
+    const sp = join(experimentResultsDir, ts, evalName, 'summary.json');
+    if (existsSync(sp)) {
+      try {
+        return JSON.parse(readFileSync(sp, 'utf-8'));
+      } catch {
+        /* skip */
+      }
+    }
+  }
+  return null;
+}
+
+/**
+ * Status handler: the one read-only command to answer "what's the work to be done?"
+ * after editing or syncing evals. For each (experiment, eval) it classifies the newest
+ * result by EVAL CONTENT (so a benign config-only change isn't reported as work):
+ *
+ *   - new      → the eval was never run for this experiment
+ *   - changed  → the eval's content changed since it was run
+ *   - up to date
+ *
+ * The framework only REPORTS; it has no opinion on which staleness is acceptable —
+ * that policy lives in the consumer (e.g. `agent-eval status --json` in CI, filtered
+ * against the repo's own accepted-stale list). `--check` is a simple gate that fails
+ * on any new/changed eval. Writes nothing.
+ */
+interface StatusRow { name: string; baseName: string; newEvals: string[]; changedEvals: string[]; cached: number }
+
+async function statusCommand(
+  experimentArgs: string[],
+  options: { check?: boolean; json?: boolean } = {}
+): Promise<{ rows: StatusRow[]; totalRun: number }> {
+  const { experimentsDir, evalsDir, resultsDir } = resolveProjectDirs();
+  const selectedFiles = selectExperimentFiles(experimentsDir, experimentArgs);
+  const { fixtures } = loadAllFixtures(evalsDir);
+  const availableNames = fixtures.map((f) => f.name);
+  const fixtureByName = new Map(fixtures.map((f) => [f.name, f]));
+
+  const allNew = new Set<string>();
+  const allChanged = new Set<string>();
+  const rows: StatusRow[] = [];
+
+  for (const file of selectedFiles) {
+    let config;
+    try {
+      config = await loadConfig(resolve(experimentsDir, file));
+    } catch (err) {
+      if (!options.json) console.warn(chalk.yellow(`Skipping ${file}: ${err instanceof Error ? err.message : err}`));
+      continue;
+    }
+    const baseName = file.replace(/\.ts$/, '');
+    const models = Array.isArray(config.model) ? config.model : [config.model];
+    let evalNames: string[];
+    try {
+      evalNames = resolveEvalNames(config.evals, availableNames);
+    } catch {
+      evalNames = availableNames;
+    }
+
+    for (const model of models) {
+      const experimentName = models.length > 1 ? `${baseName}/${model}` : baseName;
+      const modelConfig = { ...config, model };
+      const expResultsDir = join(resultsDir, experimentName);
+      const newEvals: string[] = [];
+      const changedEvals: string[] = [];
+      let cached = 0;
+
+      for (const ev of evalNames) {
+        const fx = fixtureByName.get(ev);
+        if (!fx) continue;
+        const summary = findNewestSummary(expResultsDir, ev);
+        if (!summary) {
+          newEvals.push(ev);
+          allNew.add(ev);
+          continue;
+        }
+        const content = computeContentFingerprint(fx.path);
+        const storedContent = summary.contentFingerprint as string | undefined;
+        // Content-based: a config-only change isn't work (refingerprint carries it).
+        // Legacy results (no content hash) fall back to the combined fingerprint.
+        const fresh = storedContent !== undefined
+          ? storedContent === content
+          : summary.fingerprint === computeFingerprint(fx.path, modelConfig as never);
+        if (fresh) cached++;
+        else {
+          changedEvals.push(ev);
+          allChanged.add(ev);
+        }
+      }
+      rows.push({ name: experimentName, baseName, newEvals, changedEvals, cached });
+    }
+  }
+
+  const totalRun = rows.reduce((s, r) => s + r.newEvals.length + r.changedEvals.length, 0);
+
+  if (options.json) {
+    const work = rows
+      .filter((r) => r.newEvals.length || r.changedEvals.length)
+      .map((r) => ({ experiment: r.name, new: r.newEvals, changed: r.changedEvals }));
+    console.log(JSON.stringify({ totalRun, work }, null, 2));
+    return { rows, totalRun };
+  }
+
+  console.log('');
+  if (allNew.size > 0 || allChanged.size > 0) {
+    console.log(chalk.bold('Evals needing work:'));
+    for (const e of [...allNew].sort()) console.log(`  ${chalk.green('new')}      ${e}`);
+    for (const e of [...allChanged].sort()) console.log(`  ${chalk.yellow('changed')}  ${e}`);
+    console.log('');
+  }
+
+  if (totalRun === 0) {
+    console.log(chalk.green('Everything up to date — nothing to run.\n'));
+    return { rows, totalRun: 0 };
+  }
+
+  const nameWidth = Math.max(...rows.map((r) => r.name.length)) + 2;
+  console.log(chalk.bold(`Work to do — ${totalRun} run(s) across ${rows.filter((r) => r.newEvals.length + r.changedEvals.length).length} experiment(s):`));
+  for (const r of rows) {
+    const n = r.newEvals.length + r.changedEvals.length;
+    if (n === 0) continue;
+    const extra = r.cached ? chalk.gray(`  (${r.cached} up to date)`) : '';
+    console.log(`  ${r.name.padEnd(nameWidth)}${chalk.yellow(`${n} to run`)}${extra}`);
+  }
+  console.log('');
+  console.log(chalk.gray('Run:  agent-eval run <experiment...>   (or run `agent-eval` to pick interactively)'));
+  console.log('');
+
+  if (options.check) {
+    console.log(chalk.red(`✗ ${totalRun} eval-run(s) outstanding.`));
+    process.exitCode = 1;
+  }
+  return { rows, totalRun };
+}
+
+/**
+ * Refingerprint handler: carry forward CONFIG-only changes in existing results so
+ * benign edits (e.g. a timeout bump) don't trigger reruns — WITHOUT masking real
+ * eval changes. For each committed result we compare the eval's current content
+ * fingerprint to the one the result was produced with:
+ *
+ *   - content unchanged → re-stamp the combined fingerprint (carry the config change)
+ *   - content changed    → leave it stale (an honest "this eval changed, rerun me")
+ *   - legacy result (no stored content fingerprint) → adopt the current content
+ *     fingerprint only if the result is already fully current; otherwise leave stale
+ *
+ * This replaces the old consumer-side `updateFingerprints`, which re-stamped every
+ * result unconditionally and so silently hid eval changes.
+ */
+async function carryForwardConfigChanges(
+  experimentsDir: string,
+  evalsDir: string,
+  resultsDir: string,
+  selectedFiles: string[],
+  dry = false
+): Promise<{ carried: number; stale: number }> {
+  let carried = 0;
+  let stale = 0;
+  for (const file of selectedFiles) {
+    let config;
+    try {
+      config = await loadConfig(resolve(experimentsDir, file));
+    } catch {
+      continue;
+    }
+    const baseName = file.replace(/\.ts$/, '');
+    const models = Array.isArray(config.model) ? config.model : [config.model];
+    for (const model of models) {
+      const experimentName = models.length > 1 ? `${baseName}/${model}` : baseName;
+      const modelConfig = { ...config, model };
+      const expResultsDir = join(resultsDir, experimentName);
+      if (!existsSync(expResultsDir)) continue;
+      for (const timestamp of readdirSync(expResultsDir)) {
+        const tsDir = join(expResultsDir, timestamp);
+        if (!statSync(tsDir).isDirectory()) continue;
+        for (const evalName of readdirSync(tsDir)) {
+          const summaryPath = join(tsDir, evalName, 'summary.json');
+          const evalPath = join(evalsDir, evalName);
+          if (!existsSync(summaryPath) || !existsSync(evalPath)) continue;
+          const summary = JSON.parse(readFileSync(summaryPath, 'utf-8'));
+          const decision = decideRefingerprint(
+            { fingerprint: summary.fingerprint, contentFingerprint: summary.contentFingerprint },
+            {
+              fingerprint: computeFingerprint(evalPath, modelConfig as never),
+              contentFingerprint: computeContentFingerprint(evalPath),
+            }
+          );
+          let changed = false;
+          if (decision.fingerprint !== undefined) {
+            summary.fingerprint = decision.fingerprint;
+            changed = true;
+          }
+          if (decision.contentFingerprint !== undefined) {
+            summary.contentFingerprint = decision.contentFingerprint;
+            changed = true;
+          }
+          if (decision.stale) stale++;
+          if (changed) {
+            carried++;
+            if (!dry) writeFileSync(summaryPath, JSON.stringify(summary, null, 2) + '\n');
+          }
+        }
+      }
+    }
+  }
+  return { carried, stale };
+}
+
+async function refingerprintCommand(experimentArgs: string[], options: { dry?: boolean }) {
+  const { experimentsDir, evalsDir, resultsDir } = resolveProjectDirs();
+  const selectedFiles = selectExperimentFiles(experimentsDir, experimentArgs);
+  const { carried, stale } = await carryForwardConfigChanges(experimentsDir, evalsDir, resultsDir, selectedFiles, options.dry);
+  const verb = options.dry ? 'would carry forward' : 'carried forward';
+  console.log(chalk.green(`Refingerprint: ${verb} ${carried} config-only result(s).`));
+  if (stale > 0) {
+    console.log(chalk.yellow(`${stale} result(s) have a changed eval and were left stale — run them to refresh.`));
+  }
+}
+
+/** Run the chosen experiments: carry config-only changes forward, then run their
+ * new/changed evals (reuse handles the rest). Selection is explicit — there is no
+ * "run everything." */
+async function runSelected(
+  experimentArgs: string[],
+  options: { force?: boolean; smoke?: boolean; ackFailures?: boolean }
+): Promise<void> {
+  const { experimentsDir, evalsDir, resultsDir } = resolveProjectDirs();
+  const files = selectExperimentFiles(experimentsDir, experimentArgs);
+  if (files.length === 0) {
+    console.error(chalk.red(`No experiments matched: ${experimentArgs.join(', ')}`));
+    process.exit(1);
+  }
+  // Carry config-only changes forward first so a config edit (e.g. pinning a judge)
+  // doesn't make every eval look changed.
+  await carryForwardConfigChanges(experimentsDir, evalsDir, resultsDir, files);
+  await runAllCommand(experimentArgs, options);
+}
+
+/** Read one line from the user (interactive multi-select uses this). */
+function promptLine(question: string): Promise<string> {
+  return new Promise((res) => {
+    const rl = createInterface({ input: process.stdin, output: process.stdout });
+    rl.question(question, (ans) => {
+      rl.close();
+      res(ans.trim());
+    });
+  });
+}
+
+/** Numbered multi-select over experiment names. Returns the picked names. */
+async function pickExperiments(choices: string[]): Promise<string[]> {
+  console.log(chalk.bold('Pick experiments to run:'));
+  choices.forEach((c, i) => console.log(`  ${chalk.cyan(String(i + 1).padStart(2))}  ${c}`));
+  const ans = await promptLine(chalk.bold('\nNumbers (e.g. 1,3), "all", or Enter to skip: '));
+  if (!ans) return [];
+  if (ans.toLowerCase() === 'all') return choices;
+  const picked = new Set<string>();
+  for (const tok of ans.split(/[\s,]+/)) {
+    const n = Number(tok);
+    if (Number.isInteger(n) && n >= 1 && n <= choices.length) picked.add(choices[n - 1]);
+  }
+  return [...picked];
+}
+
 program
-  .command('run-all')
-  .description('Discover and run all experiments with fingerprint reuse and classification')
-  .argument('[experiments...]', 'Experiment names, glob patterns, or paths like "experiments/cc.ts" (default: all)')
-  .option('--dry', 'Preview what would run without executing')
+  .command('run')
+  .description('Run new/changed evals for the named experiment(s). You must name what to run')
+  .argument('<experiments...>', 'Experiment names or glob patterns')
   .option('--force', 'Ignore fingerprints, re-run everything')
   .option('--smoke', 'Run 1 eval per experiment for sanity checking')
   .option('--ack-failures', 'Keep non-model failures (infra/timeout) as final results instead of deleting them')
-  .action(runAllCommand);
+  .action(runSelected);
+
+program
+  .command('status')
+  .description('Show new/changed evals and the work to do, per experiment. Read-only')
+  .argument('[experiments...]', 'Experiment names or glob patterns (default: all)')
+  .option('--check', 'Exit non-zero if any new/changed eval is outstanding (for CI)')
+  .option('--json', 'Machine-readable output (for custom CI policy / ignore lists)')
+  .action(async (experimentArgs, options) => {
+    await statusCommand(experimentArgs, options);
+  });
+
+program
+  .command('refingerprint')
+  .description('(internal) Carry config-only changes forward in cached results; run by sync')
+  .argument('[experiments...]', 'Experiment names or glob patterns (default: all)')
+  .option('--dry', 'Preview without writing')
+  .action(refingerprintCommand);
 
 /**
- * Default command - run experiments with fingerprint reuse and classification.
- *
- * Delegates to runAllCommand so the single-experiment path and the run-all path
- * share identical fingerprinting, result storage, and reuse behavior. Running a
- * single experiment is just run-all filtered to one name.
- *
- * Usage:
- *   agent-eval           # runs all experiments
- *   agent-eval cc        # runs single experiment
- *   agent-eval cc --dry  # preview single experiment
+ * Default command (bare `agent-eval`): show status, then — in a terminal — let the
+ * user multi-select which experiments to run. Never auto-runs everything. A config
+ * path/name still runs that single experiment (back-compat).
  */
 program
-  .argument('[config]', 'Experiment name (e.g., "cc") or path (e.g., "experiments/cc.ts"). Omit to run all experiments.')
-  .option('--dry', 'Preview what would run without executing')
+  .argument('[config]', 'Experiment name or path to run directly. Omit to show status + pick.')
+  .option('--dry', 'Preview a single experiment without executing')
   .option('--smoke', 'Run a single eval to verify setup (API keys, model IDs, sandbox)')
   .option('--force', 'Ignore fingerprints, re-run everything')
   .option('--ack-failures', 'Keep non-model failures (infra/timeout) as final results instead of deleting them')
   .action(async (configInput: string | undefined, options: { dry?: boolean; smoke?: boolean; force?: boolean; ackFailures?: boolean }) => {
-    await runAllCommand(configInput ? [configInput] : [], options);
+    if (configInput) {
+      await runExperimentCommand(configInput, options);
+      return;
+    }
+    const plan = await statusCommand([]);
+    if (plan.totalRun === 0) return;
+    if (!process.stdin.isTTY || !process.stdout.isTTY) return; // non-interactive (CI): status only
+    const choices = [...new Set(plan.rows.filter((r) => r.newEvals.length + r.changedEvals.length > 0).map((r) => r.baseName))];
+    const selected = await pickExperiments(choices);
+    if (selected.length === 0) {
+      console.log(chalk.gray('Nothing selected — run `agent-eval run <experiment...>` anytime.\n'));
+      return;
+    }
+    await runSelected(selected, options);
   });
 
 program.parse();

@@ -1,5 +1,40 @@
 # @vercel/agent-eval
 
+## 1.2.0
+
+### Minor Changes
+
+- [#162](https://github.com/vercel-labs/agent-eval/pull/162) [`7021c4b`](https://github.com/vercel-labs/agent-eval/commit/7021c4b914cc04d77237442ef9bcec307f6ceb0c) Thanks [@gaojude](https://github.com/gaojude)! - Add an agentic LLM-judge matcher for EVAL.ts. Each judge assertion re-invokes the same agent (and model) that did the codegen, in the same sandbox, to evaluate a criterion — then returns pass/fail. No fresh sandbox, no copied evidence.
+
+  ```ts
+  import { test, expect } from "vitest";
+  import { environment, transcript } from "@vercel/agent-eval/eval";
+
+  test("quality", async () => {
+    await expect(environment).toSatisfyCriterion(
+      "uses Server Components for the product list"
+    );
+    await expect(transcript).toSatisfyCriterion(
+      "diagnosed with DevTools, not trial-and-error"
+    );
+    await expect(environment).toScoreAtLeast(
+      "production-quality error handling",
+      0.8
+    );
+  });
+  ```
+
+  - Two implicit subjects (`environment`, `transcript`) — no paths.
+  - You supply only the criterion; the framework owns the prompt + verdict contract.
+  - Failures are attributable in the eval output (`[judge:environment] FAIL (score): reason`).
+  - The raw transcript is materialized to a sandbox file so the judge reads it by path (never dumped into a prompt). Framework files under `__agent_eval__/` are now gitignored, so they no longer appear in captured generated files.
+
+## 1.1.1
+
+### Patch Changes
+
+- [#152](https://github.com/vercel-labs/agent-eval/pull/152) [`c016ea0`](https://github.com/vercel-labs/agent-eval/commit/c016ea0319c2c22bbe515ff9647b8e6e64b4be07) Thanks [@molebox](https://github.com/molebox)! - Fix Claude Code prompt being consumed by `--allowedTools` when `webResearch` is enabled. The flag is variadic and keeps capturing positionals until the next flag, so even the single comma-separated token from 1.1.0 swallowed the trailing prompt ("Input must be provided either through stdin or as a prompt argument when using --print", verified live on claude 2.1.112). `--allowedTools` is now emitted before the always-present `--dangerously-skip-permissions`, which terminates the variadic capture before the prompt. Default-off argument construction is unchanged.
+
 ## 1.1.0
 
 ### Minor Changes

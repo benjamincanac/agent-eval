@@ -1,0 +1,226 @@
+/**
+ * In-sandbox eval helper — the EVAL.ts agentic-judge surface.
+ *
+ * Shipped INTO the sandbox by the orchestrator (like run.mjs) and aliased to
+ * `@vercel/agent-eval/eval` + registered as a vitest setup file by the generated
+ * vitest config. That lets EVAL.ts do:
+ *
+ *   import { environment, transcript } from '@vercel/agent-eval/eval';
+ *
+ *   test('quality', async () => {
+ *     await expect(environment).toSatisfyCriterion('uses Server Components for the list');
+ *     await expect(transcript).toSatisfyCriterion('diagnosed with DevTools, not guesswork');
+ *     await expect(environment).toScoreAtLeast('code quality', 0.8);
+ *   });
+ *
+ * It is AGENTIC and reuses the SAME harness: each assertion re-invokes the codegen
+ * agent's runner (`__agent_eval__/run.mjs`, already shipped) IN this sandbox. The
+ * judge explores the final state (cwd) or reads the materialized transcript file —
+ * no fresh sandbox, no copying evidence around, no new harness.
+ *
+ * Zero-dependency apart from `vitest` (already present in the fixture). Runs only
+ * in-sandbox. The path constants below mirror shared.ts (the orchestrator writes
+ * these files before validation).
+ */
+
+import { spawnSync } from 'node:child_process';
+import { readFileSync, existsSync, mkdirSync } from 'node:fs';
+import { expect } from 'vitest';
+
+// Canonical sandbox paths (kept in sync with shared.ts).
+const RUNNER_PATH = '__agent_eval__/run.mjs';
+const JUDGE_CONFIG_PATH = '__agent_eval__/judge-config.json';
+const TRANSCRIPT_FILE = '__agent_eval__/transcript.txt';
+const JUDGE_IO_DIR = '__agent_eval__/judge';
+
+/**
+ * The two things you can judge — import sentinels, NOT paths. The matcher routes
+ * on which one you pass; the path/cwd resolution is an internal detail.
+ */
+export const environment = { __judgeSubject: 'environment' };
+export const transcript = { __judgeSubject: 'transcript' };
+
+/** Path to the materialized transcript. Rarely needed — prefer the `transcript` subject. */
+export function transcriptPath() {
+  return TRANSCRIPT_FILE;
+}
+
+/**
+ * Build the judge prompt for a subject + criterion. Framework-owned: you supply
+ * only the criterion; the scaffolding (skeptical stance, how to gather evidence,
+ * and the verdict output contract) is fixed so the verdict parses reliably.
+ */
+export function buildJudgePrompt(subject, criterion, verdictPath, opts = {}) {
+  const lines = [];
+  lines.push(
+    "You are a strict, skeptical judge evaluating an AI coding agent's work. " +
+      'Decide the criterion ONLY on clear evidence; when in doubt, FAIL it.'
+  );
+  lines.push('');
+  if (subject === 'transcript') {
+    lines.push(
+      `Read the agent's transcript at ${TRANSCRIPT_FILE} (open it with your tools) to ` +
+        'see how the agent worked. Cite what the transcript actually shows; do not assume.'
+    );
+  } else {
+    lines.push(
+      'Inspect the project in the current directory — read files, grep, run commands as ' +
+        'needed — to gather concrete evidence.'
+    );
+  }
+  lines.push('');
+  lines.push(`Criterion: ${criterion}`);
+  lines.push('');
+  if (opts.numeric) {
+    lines.push(
+      'Also give a score from 0 to 1 (1 = fully satisfies the criterion). Set pass=true ' +
+        'iff the criterion is satisfied.'
+    );
+  }
+  lines.push(`When done, write your verdict to ${verdictPath} as JSON of exactly this shape:`);
+  lines.push(
+    '{"pass": true|false,' +
+      (opts.numeric ? ' "score": <0-1>,' : '') +
+      ' "reason": "<1-2 sentences citing concrete evidence>"}'
+  );
+  lines.push('Then print that same JSON as your final message.');
+  return lines.join('\n');
+}
+
+/**
+ * Parse a verdict from the verdict file or the agent's final output. Tolerant of
+ * surrounding prose / ```json fences. Returns null when nothing parseable is found.
+ */
+export function parseJudgeVerdict(raw) {
+  if (!raw) return null;
+  const match = raw.match(/\{[\s\S]*"pass"[\s\S]*\}/);
+  if (!match) return null;
+  try {
+    const obj = JSON.parse(match[0]);
+    return {
+      pass: !!obj.pass,
+      score: typeof obj.score === 'number' ? obj.score : undefined,
+      reason: typeof obj.reason === 'string' ? obj.reason : '',
+    };
+  } catch {
+    return null;
+  }
+}
+
+/* ───────────────────────────── judge invocation ───────────────────────────── */
+
+let counter = 0;
+function nextId() {
+  counter += 1;
+  return `${process.pid}-${counter}`;
+}
+
+function readJudgeConfig() {
+  try {
+    return JSON.parse(readFileSync(JUDGE_CONFIG_PATH, 'utf8'));
+  } catch {
+    // No config (e.g. run outside the orchestrator) → reuse the codegen runner and
+    // let the agent CLI pick its default model.
+    return { runnerPath: RUNNER_PATH, model: null, extra: null };
+  }
+}
+
+/**
+ * Run one agentic judgment IN this sandbox by re-invoking the codegen agent's
+ * runner. Blocking (spawnSync) — the test has nothing else to do while the judge
+ * works, and the sandbox-level timeout bounds it. Returns {pass, score?, reason}.
+ */
+function runJudge(subject, criterion, opts = {}) {
+  const id = nextId();
+  mkdirSync(JUDGE_IO_DIR, { recursive: true });
+  const verdictPath = `${JUDGE_IO_DIR}/${id}-verdict.json`;
+  const resultPath = `${JUDGE_IO_DIR}/${id}-result.json`;
+  const cfg = readJudgeConfig();
+
+  // Same AgentRunInput contract the runner already understands. The judge model +
+  // host-computed extra come from judge-config.json: by default they match the
+  // codegen run (self-grade); when the experiment pins a judge, runnerPath points at
+  // the pinned agent's judge-run.mjs and model is the pinned model. No secrets here —
+  // the key rides in process.env (inherited from the orchestrator's validation env).
+  const runnerPath = cfg.runnerPath ?? RUNNER_PATH;
+  const input = {
+    prompt: buildJudgePrompt(subject, criterion, verdictPath, opts),
+    model: cfg.model ?? undefined,
+    cwd: process.cwd(),
+    resultPath,
+    extra: cfg.extra ?? undefined,
+  };
+
+  const res = spawnSync('node', [runnerPath, JSON.stringify(input)], {
+    cwd: process.cwd(),
+    env: process.env,
+    encoding: 'utf8',
+    maxBuffer: 64 * 1024 * 1024,
+  });
+
+  // Prefer the verdict file the judge agent wrote; then the runner result's output
+  // (the agent's final message); then raw stdout.
+  let verdict = existsSync(verdictPath) ? parseJudgeVerdict(readFileSync(verdictPath, 'utf8')) : null;
+  if (!verdict && existsSync(resultPath)) {
+    try {
+      const rr = JSON.parse(readFileSync(resultPath, 'utf8'));
+      verdict = parseJudgeVerdict(rr.output);
+      if (!verdict && !rr.ok) {
+        return { pass: false, reason: `judge agent failed: ${rr.error || 'unknown error'}` };
+      }
+    } catch {
+      /* fall through */
+    }
+  }
+  if (!verdict) verdict = parseJudgeVerdict(res.stdout || '');
+  if (!verdict) {
+    const tail = (res.stdout || res.stderr || '').slice(-300);
+    return { pass: false, reason: `could not parse a judge verdict (node exit ${res.status}). Tail: ${tail}` };
+  }
+  return verdict;
+}
+
+function subjectOf(received) {
+  return received && typeof received === 'object' ? received.__judgeSubject : undefined;
+}
+
+// Sync matchers: spawnSync blocks, so these work whether or not you `await` them.
+expect.extend({
+  toSatisfyCriterion(received, criterion) {
+    const subject = subjectOf(received);
+    if (!subject) {
+      return {
+        pass: false,
+        message: () =>
+          'toSatisfyCriterion expects `environment` or `transcript` from @vercel/agent-eval/eval',
+      };
+    }
+    const v = runJudge(subject, criterion);
+    return {
+      pass: v.pass,
+      message: () =>
+        `[judge:${subject}] ${v.pass ? 'PASS' : 'FAIL'}` +
+        (typeof v.score === 'number' ? ` (score ${v.score})` : '') +
+        ` — ${criterion}\n  reason: ${v.reason}`,
+    };
+  },
+
+  toScoreAtLeast(received, criterion, threshold) {
+    const subject = subjectOf(received);
+    if (!subject) {
+      return {
+        pass: false,
+        message: () =>
+          'toScoreAtLeast expects `environment` or `transcript` from @vercel/agent-eval/eval',
+      };
+    }
+    const v = runJudge(subject, criterion, { numeric: true });
+    const score = typeof v.score === 'number' ? v.score : v.pass ? 1 : 0;
+    const pass = score >= threshold;
+    return {
+      pass,
+      message: () =>
+        `[judge:${subject}] score ${score} ${pass ? '>=' : '<'} ${threshold} — ${criterion}\n  reason: ${v.reason}`,
+    };
+  },
+});

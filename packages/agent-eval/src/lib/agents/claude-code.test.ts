@@ -1,5 +1,8 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { buildClaudeCodeCliArgs, createClaudeCodeAgent, extractObservedModelFromClaudeTranscript } from './claude-code.js';
+// Pure helpers live in the in-sandbox runner (so the tested logic is exactly what
+// the sandbox runs); the Agent factory lives in the host-side definition.
+import { buildClaudeCodeCliArgs, extractObservedModelFromClaudeTranscript } from './claude-code/run.mjs';
+import { createClaudeCodeAgent } from './claude-code/agent.js';
 
 describe('buildClaudeCodeCliArgs', () => {
   const baseOptions = {
@@ -23,11 +26,11 @@ describe('buildClaudeCodeCliArgs', () => {
     const args = buildClaudeCodeCliArgs({ ...baseOptions, model: 'opus', webResearch: true });
     expect(args).toEqual([
       '--print',
+      '--allowedTools',
+      'WebSearch,WebFetch',
       '--model',
       'opus',
       '--dangerously-skip-permissions',
-      '--allowedTools',
-      'WebSearch,WebFetch',
       'where should this run?',
     ]);
   });
@@ -41,6 +44,23 @@ describe('buildClaudeCodeCliArgs', () => {
     expect(allowedToolsIndex).toBeGreaterThan(-1);
     expect(args[allowedToolsIndex + 1]).toBe('WebSearch,WebFetch');
     expect(args[args.length - 1]).toBe(baseOptions.prompt);
+  });
+
+  it('always follows the --allowedTools value with a flag, never the prompt', () => {
+    // The variadic capture only stops at the next flag. Even as a single
+    // comma token, `--allowedTools "WebSearch,WebFetch" <prompt>` consumes
+    // the prompt as another tool name (verified live on claude 2.1.112:
+    // "Input must be provided either through stdin or as a prompt argument").
+    for (const options of [
+      { ...baseOptions, webResearch: true },
+      { ...baseOptions, model: 'opus', webResearch: true },
+      { ...baseOptions, webResearch: true, agentOptions: { effort: 'high' } },
+    ]) {
+      const args = buildClaudeCodeCliArgs(options);
+      const next = args[args.indexOf('--allowedTools') + 2];
+      expect(next, `token after allowedTools value in [${args.join(' ')}]`).toMatch(/^--/);
+      expect(args[args.length - 1]).toBe(baseOptions.prompt);
+    }
   });
 
   it('keeps the prompt as the final argument with effort set', () => {

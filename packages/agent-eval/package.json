@@ -1,6 +1,6 @@
 {
   "name": "@vercel/agent-eval",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "description": "Framework for testing AI coding agents in isolated sandboxes",
   "repository": {
     "type": "git",
@@ -16,7 +16,7 @@
     "dist"
   ],
   "scripts": {
-    "build": "tsc",
+    "build": "tsc && node scripts/copy-runners.mjs",
     "test": "vitest run",
     "test:watch": "vitest",
     "test:docker": "SANDBOX_BACKEND=docker vitest run src/lib/docker-sandbox.test.ts",

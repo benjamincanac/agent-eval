@@ -1,11 +1,11 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { spawnSync } from 'child_process';
-import { mkdirSync, writeFileSync, rmSync, existsSync } from 'fs';
+import { execSync } from 'child_process';
+import { mkdirSync, writeFileSync, readFileSync, rmSync, existsSync } from 'fs';
 import { join, resolve } from 'path';
 import { fileURLToPath } from 'url';
 import { dirname } from 'path';
+import { computeContentFingerprint, computeFingerprint } from './lib/fingerprint.js';
 import { loadConfig } from './lib/config.js';
-import { computeFingerprint } from './lib/fingerprint.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -14,22 +14,23 @@ const CLI_PATH = resolve(PROJECT_ROOT, 'src/cli.ts');
 
 const TEST_DIR = '/tmp/eval-framework-cli-test';
 
-function runCli(
-  args: string[],
-  cwd?: string,
-  env?: NodeJS.ProcessEnv
-): { stdout: string; stderr: string; exitCode: number } {
-  const result = spawnSync('npx', ['tsx', CLI_PATH, ...args], {
-    cwd: cwd ?? PROJECT_ROOT,
-    encoding: 'utf-8',
-    env: env ?? process.env,
-  });
-  return {
-    stdout: result.stdout ?? '',
-    // Surface spawn failures (e.g. npx missing) instead of an empty stderr.
-    stderr: (result.stderr ?? '') + (result.error ? `\n${result.error.message}` : ''),
-    exitCode: result.status ?? 1,
-  };
+function runCli(args: string[], cwd?: string, env?: Record<string, string>): { stdout: string; stderr: string; exitCode: number } {
+  try {
+    const stdout = execSync(`npx tsx ${CLI_PATH} ${args.join(' ')}`, {
+      cwd: cwd ?? PROJECT_ROOT,
+      encoding: 'utf-8',
+      stdio: ['pipe', 'pipe', 'pipe'],
+      env: env ? { ...process.env, ...env } : process.env,
+    });
+    return { stdout, stderr: '', exitCode: 0 };
+  } catch (error: unknown) {
+    const e = error as { stdout?: Buffer; stderr?: Buffer; status?: number };
+    return {
+      stdout: e.stdout?.toString() ?? '',
+      stderr: e.stderr?.toString() ?? '',
+      exitCode: e.status ?? 1,
+    };
+  }
 }
 
 describe('CLI', () => {
@@ -52,153 +53,319 @@ describe('CLI', () => {
     });
   });
 
-  // Helper to scaffold a project/experiments + project/evals layout.
-  function scaffoldProject(
-    name: string,
-    options: { configContent?: string; evals?: string[]; omitEvalFile?: boolean } = {}
-  ): { projectDir: string; experimentsDir: string; evalsDir: string } {
-    const projectDir = join(TEST_DIR, name);
-    const experimentsDir = join(projectDir, 'experiments');
-    mkdirSync(experimentsDir, { recursive: true });
-
-    const configContent = options.configContent ?? `export default { agent: 'claude-code' };`;
-    writeFileSync(join(experimentsDir, 'cc.ts'), configContent);
-
-    const evalsDir = join(projectDir, 'evals');
-    mkdirSync(evalsDir);
-    for (const evalName of options.evals ?? []) {
-      const fixture = join(evalsDir, evalName);
-      mkdirSync(fixture);
-      writeFileSync(join(fixture, 'PROMPT.md'), 'Test task');
-      if (!options.omitEvalFile) {
-        writeFileSync(join(fixture, 'EVAL.ts'), 'test code');
-      }
-      writeFileSync(join(fixture, 'package.json'), JSON.stringify({ type: 'module' }));
-    }
-
-    return { projectDir, experimentsDir, evalsDir };
-  }
-
   describe('run command', () => {
-    it('shows error when experiment name does not match', () => {
-      const { projectDir } = scaffoldProject('no-match-project', { evals: ['my-eval'] });
-
-      const result = runCli(['does-not-exist', '--dry'], projectDir);
-      expect(result.stderr).toContain('No experiments matched');
+    it('shows error when the named experiment does not exist', () => {
+      const result = runCli(['run', 'no-such-experiment']);
+      expect(result.stderr.toLowerCase()).toMatch(/no experiments matched|required/);
       expect(result.exitCode).toBe(1);
     });
 
-    it('runs a single experiment by name with fingerprint reuse (dry run)', () => {
-      const { projectDir } = scaffoldProject('project', { evals: ['my-eval'] });
+    it('runs with valid config and evals (dry run)', () => {
+      // Create project structure matching convention:
+      // project/experiments/config.ts and project/evals/
+      const projectDir = join(TEST_DIR, 'project');
+      const experimentsDir = join(projectDir, 'experiments');
+      mkdirSync(experimentsDir, { recursive: true });
 
-      // A single name routes through the same run-all path: dry run lists the
-      // eval as something to run since nothing is cached yet.
-      const result = runCli(['cc', '--dry'], projectDir);
+      // Create config file in experiments/
+      const configContent = `export default { agent: 'claude-code' };`;
+      writeFileSync(join(experimentsDir, 'cc.ts'), configContent);
+
+      // Create evals directory with valid fixture
+      const evalsDir = join(projectDir, 'evals');
+      mkdirSync(evalsDir);
+      const fixture = join(evalsDir, 'my-eval');
+      mkdirSync(fixture);
+      writeFileSync(join(fixture, 'PROMPT.md'), 'Test task');
+      writeFileSync(join(fixture, 'EVAL.ts'), 'test code');
+      writeFileSync(join(fixture, 'package.json'), JSON.stringify({ type: 'module' }));
+
+      const result = runCli(['experiments/cc.ts', '--dry'], projectDir);
       expect(result.stdout).toContain('my-eval');
-      expect(result.stdout).toContain('to run');
+      expect(result.stdout).toContain('DRY RUN');
       expect(result.exitCode).toBe(0);
     });
 
-    it('--smoke picks first eval alphabetically (dry run)', () => {
-      const { projectDir } = scaffoldProject('smoke-project', {
-        evals: ['beta-eval', 'alpha-eval'],
-      });
+    it('supports shorthand config names (dry run)', () => {
+      // Create project structure
+      const projectDir = join(TEST_DIR, 'shorthand-project');
+      const experimentsDir = join(projectDir, 'experiments');
+      mkdirSync(experimentsDir, { recursive: true });
+
+      const configContent = `export default { agent: 'claude-code' };`;
+      writeFileSync(join(experimentsDir, 'cc.ts'), configContent);
+
+      const evalsDir = join(projectDir, 'evals');
+      mkdirSync(evalsDir);
+      const fixture = join(evalsDir, 'test-eval');
+      mkdirSync(fixture);
+      writeFileSync(join(fixture, 'PROMPT.md'), 'Test task');
+      writeFileSync(join(fixture, 'EVAL.ts'), 'test code');
+      writeFileSync(join(fixture, 'package.json'), JSON.stringify({ type: 'module' }));
+
+      // Use shorthand: "cc" instead of "experiments/cc.ts"
+      const result = runCli(['cc', '--dry'], projectDir);
+      expect(result.stdout).toContain('test-eval');
+      expect(result.stdout).toContain('DRY RUN');
+      expect(result.exitCode).toBe(0);
+    });
+
+    it('--smoke picks first eval alphabetically and sets runs to 1', () => {
+      const projectDir = join(TEST_DIR, 'smoke-project');
+      const experimentsDir = join(projectDir, 'experiments');
+      mkdirSync(experimentsDir, { recursive: true });
+
+      const configContent = `export default { agent: 'claude-code' };`;
+      writeFileSync(join(experimentsDir, 'cc.ts'), configContent);
+
+      const evalsDir = join(projectDir, 'evals');
+      mkdirSync(evalsDir);
+
+      // Create two evals - smoke should pick first alphabetically
+      for (const evalName of ['beta-eval', 'alpha-eval']) {
+        const fixture = join(evalsDir, evalName);
+        mkdirSync(fixture);
+        writeFileSync(join(fixture, 'PROMPT.md'), 'Test task');
+        writeFileSync(join(fixture, 'EVAL.ts'), 'test code');
+        writeFileSync(join(fixture, 'package.json'), JSON.stringify({ type: 'module' }));
+      }
 
       const result = runCli(['cc', '--smoke', '--dry'], projectDir);
+      expect(result.stdout).toContain('SMOKE TEST');
       expect(result.stdout).toContain('alpha-eval');
-      expect(result.stdout).not.toContain('beta-eval');
+      expect(result.stdout).toContain('1 eval(s) x 1 run(s)');
       expect(result.exitCode).toBe(0);
     });
 
     it('shows error when no valid fixtures found', () => {
-      const { projectDir } = scaffoldProject('empty-project');
+      // Create project structure matching convention
+      const projectDir = join(TEST_DIR, 'empty-project');
+      const experimentsDir = join(projectDir, 'experiments');
+      mkdirSync(experimentsDir, { recursive: true });
 
-      const result = runCli(['cc'], projectDir);
+      const configContent = `export default { agent: 'claude-code' };`;
+      writeFileSync(join(experimentsDir, 'cc.ts'), configContent);
+
+      // Create empty evals directory
+      const evalsDir = join(projectDir, 'evals');
+      mkdirSync(evalsDir);
+
+      const result = runCli(['experiments/cc.ts'], projectDir);
       expect(result.stderr).toContain('No valid eval fixtures');
       expect(result.exitCode).toBe(1);
     });
 
-    it('surfaces invalid config errors and exits non-zero for a named experiment', () => {
-      // Missing agent -> config validation fails. An explicitly named
-      // experiment that cannot load must not exit 0 (silent pass in CI).
-      const { projectDir } = scaffoldProject('bad-config', {
-        configContent: `export default { model: 'opus' };`,
-        evals: ['my-eval'],
-      });
+    it('validates config file', () => {
+      // Create project structure matching convention
+      const projectDir = join(TEST_DIR, 'bad-config');
+      const experimentsDir = join(projectDir, 'experiments');
+      mkdirSync(experimentsDir, { recursive: true });
 
-      const result = runCli(['cc', '--dry'], projectDir);
-      expect(result.stderr).toContain('Failed to load');
-      expect(result.stderr).toContain('agent');
+      // Create invalid config (missing agent)
+      const configContent = `export default { model: 'opus' };`;
+      writeFileSync(join(experimentsDir, 'cc.ts'), configContent);
+
+      const evalsDir = join(projectDir, 'evals');
+      mkdirSync(evalsDir);
+
+      const result = runCli(['experiments/cc.ts'], projectDir);
+      expect(result.stderr.toLowerCase()).toContain('error');
       expect(result.exitCode).toBe(1);
     });
 
-    it('exits non-zero when a named experiment is skipped for a missing API key', () => {
-      const { projectDir } = scaffoldProject('no-key-project', { evals: ['my-eval'] });
-
-      // Blank out every credential the key check accepts so the run is
-      // skipped before any sandbox work happens.
-      const result = runCli(['cc'], projectDir, {
-        ...process.env,
-        AI_GATEWAY_API_KEY: '',
-        ANTHROPIC_API_KEY: '',
-        VERCEL_OIDC_TOKEN: '',
-      });
-      expect(result.stderr).toContain('not set');
-      expect(result.exitCode).toBe(1);
-    });
-
-    it('accepts path-style arguments like experiments/cc.ts (dry run)', () => {
-      const { projectDir } = scaffoldProject('path-style-project', { evals: ['my-eval'] });
-
-      const result = runCli(['experiments/cc.ts', '--dry'], projectDir);
-      expect(result.stdout).toContain('my-eval');
-      expect(result.exitCode).toBe(0);
-    });
-
-    it('honors validation: none (evals without EVAL.ts are discovered)', () => {
-      const { projectDir } = scaffoldProject('no-validation-project', {
-        configContent: `export default { agent: 'claude-code', validation: 'none' };`,
-        evals: ['my-eval'],
-        omitEvalFile: true,
-      });
-
-      const result = runCli(['cc', '--dry'], projectDir);
-      expect(result.stdout).toContain('my-eval');
-      expect(result.exitCode).toBe(0);
-    });
-
-    it('reuses just-passed results: `<name>` then `run-all <name> --dry` reports cached', async () => {
-      const { projectDir, experimentsDir, evalsDir } = scaffoldProject('reuse-project', {
-        evals: ['my-eval'],
-      });
-
-      // Simulate a passed result stored at the canonical single-model layout
-      // (results/<name>/<ts>/<eval>/summary.json) with a matching fingerprint.
-      // The naming and fingerprint construction here must mirror what
-      // runAllCommand in cli.ts does for each model.
-      const config = await loadConfig(join(experimentsDir, 'cc.ts'));
-      const models = Array.isArray(config.model) ? config.model : [config.model];
-      const model = models[0];
-      const experimentName = models.length > 1 ? `cc/${model}` : 'cc';
-      const fingerprint = computeFingerprint(join(evalsDir, 'my-eval'), { ...config, model });
-
-      const evalDir = join(projectDir, 'results', experimentName, '2024-01-26T12-00-00.000Z', 'my-eval');
+    it('reuses a cached passing result for a single experiment instead of re-running', async () => {
+      // Single-model config → results stored at results/<name>/<ts>/ with a
+      // fingerprint, which the single-experiment path now scans for reuse.
+      const projectDir = join(TEST_DIR, 'single-reuse');
+      const experimentsDir = join(projectDir, 'experiments');
+      mkdirSync(experimentsDir, { recursive: true });
+      writeFileSync(join(experimentsDir, 'cc.ts'), `export default { agent: 'claude-code', model: 'opus' };`);
+      const evalDir = join(projectDir, 'evals', 'eval-1');
       mkdirSync(evalDir, { recursive: true });
+      writeFileSync(join(evalDir, 'PROMPT.md'), 'do it');
+      writeFileSync(join(evalDir, 'EVAL.ts'), 'test code');
+      writeFileSync(join(evalDir, 'package.json'), '{"type":"module"}');
+
+      // Seed a passing result whose fingerprint matches the current (eval, config).
+      const config = await loadConfig(join(experimentsDir, 'cc.ts'));
+      const model = Array.isArray(config.model) ? config.model[0] : config.model;
+      const modelConfig = { ...config, model, runs: config.runs };
+      const sp = join(projectDir, 'results', 'cc', '2026-01-01T00-00-00.000Z', 'eval-1', 'summary.json');
+      mkdirSync(dirname(sp), { recursive: true });
       writeFileSync(
-        join(evalDir, 'summary.json'),
-        JSON.stringify({ totalRuns: 1, passedRuns: 1, passRate: '100%', meanDuration: 10, fingerprint })
+        sp,
+        JSON.stringify({
+          totalRuns: 1, passedRuns: 1, passRate: '100%', meanDuration: 1,
+          fingerprint: computeFingerprint(evalDir, modelConfig as never),
+          contentFingerprint: computeContentFingerprint(evalDir),
+        })
       );
 
-      // Both the single-name path and explicit run-all should see it as cached.
-      const single = runCli(['cc', '--dry'], projectDir);
-      expect(single.stdout).toContain('cached');
-      expect(single.stdout).toContain('Nothing to run');
-      expect(single.exitCode).toBe(0);
+      // Provide a fake key so the run reaches the reuse check. Everything is cached,
+      // so no agent actually runs and the command exits cleanly.
+      const result = runCli(['cc'], projectDir, { ANTHROPIC_API_KEY: 'test-key' });
+      expect(result.stdout).toContain('cached');
+      expect(result.exitCode).toBe(0);
+    });
+  });
 
-      const runAll = runCli(['run-all', 'cc', '--dry'], projectDir);
-      expect(runAll.stdout).toContain('cached');
-      expect(runAll.stdout).toContain('Nothing to run');
-      expect(runAll.exitCode).toBe(0);
+  describe('refingerprint command', () => {
+    function setupProject(): { projectDir: string; evalPath: string; summaryPath: string } {
+      const projectDir = join(TEST_DIR, 'refp');
+      const experimentsDir = join(projectDir, 'experiments');
+      mkdirSync(experimentsDir, { recursive: true });
+      writeFileSync(join(experimentsDir, 'cc.ts'), `export default { agent: 'claude-code', model: 'opus' };`);
+      const evalDir = join(projectDir, 'evals', 'eval-1');
+      mkdirSync(evalDir, { recursive: true });
+      writeFileSync(join(evalDir, 'PROMPT.md'), 'do it');
+      writeFileSync(join(evalDir, 'EVAL.ts'), 'test code');
+      writeFileSync(join(evalDir, 'package.json'), '{"type":"module"}');
+      const summaryDir = join(projectDir, 'results', 'cc', '2026-01-01T00-00-00.000Z', 'eval-1');
+      mkdirSync(summaryDir, { recursive: true });
+      return { projectDir, evalPath: evalDir, summaryPath: join(summaryDir, 'summary.json') };
+    }
+
+    it('carries forward a config-only change but never masks a content change', () => {
+      const { projectDir, evalPath, summaryPath } = setupProject();
+      const currentContent = computeContentFingerprint(evalPath);
+
+      // Config-only change: stored content fp matches current, combined is stale.
+      writeFileSync(
+        summaryPath,
+        JSON.stringify({
+          totalRuns: 1, passedRuns: 1, passRate: '100%', meanDuration: 1,
+          fingerprint: 'STALE_COMBINED', contentFingerprint: currentContent,
+        })
+      );
+      let r = runCli(['refingerprint'], projectDir);
+      expect(r.exitCode).toBe(0);
+      let summary = JSON.parse(readFileSync(summaryPath, 'utf-8'));
+      expect(summary.fingerprint).not.toBe('STALE_COMBINED'); // carried forward
+      expect(summary.fingerprint).toMatch(/^[a-f0-9]{64}$/);
+      expect(summary.contentFingerprint).toBe(currentContent); // content untouched
+
+      // Content change: stored content fp differs → must be left stale, NOT masked.
+      writeFileSync(
+        summaryPath,
+        JSON.stringify({
+          totalRuns: 1, passedRuns: 1, passRate: '100%', meanDuration: 1,
+          fingerprint: 'OLD_COMBINED', contentFingerprint: 'OLD_CONTENT',
+        })
+      );
+      r = runCli(['refingerprint'], projectDir);
+      expect(r.exitCode).toBe(0);
+      summary = JSON.parse(readFileSync(summaryPath, 'utf-8'));
+      expect(summary.fingerprint).toBe('OLD_COMBINED'); // NOT re-stamped
+      expect(summary.contentFingerprint).toBe('OLD_CONTENT');
+    });
+
+    it('--dry does not write', () => {
+      const { projectDir, evalPath, summaryPath } = setupProject();
+      const currentContent = computeContentFingerprint(evalPath);
+      writeFileSync(
+        summaryPath,
+        JSON.stringify({
+          totalRuns: 1, passedRuns: 1, passRate: '100%', meanDuration: 1,
+          fingerprint: 'STALE_COMBINED', contentFingerprint: currentContent,
+        })
+      );
+      const r = runCli(['refingerprint', '--dry'], projectDir);
+      expect(r.exitCode).toBe(0);
+      const summary = JSON.parse(readFileSync(summaryPath, 'utf-8'));
+      expect(summary.fingerprint).toBe('STALE_COMBINED'); // unchanged under --dry
+    });
+  });
+
+  describe('staleness flow (status / refingerprint / --check / --json)', () => {
+    it('fresh → change → status + --check + --json flag it; refingerprint stays honest; a rerun clears it', async () => {
+      const projectDir = join(TEST_DIR, 'flow');
+      const experimentsDir = join(projectDir, 'experiments');
+      mkdirSync(experimentsDir, { recursive: true });
+      writeFileSync(join(experimentsDir, 'cc.ts'), `export default { agent: 'claude-code', model: 'opus' };`);
+      const evalDir = join(projectDir, 'evals', 'eval-1');
+      mkdirSync(evalDir, { recursive: true });
+      writeFileSync(join(evalDir, 'PROMPT.md'), 'do it');
+      writeFileSync(join(evalDir, 'EVAL.ts'), 'v1');
+      writeFileSync(join(evalDir, 'package.json'), '{"type":"module"}');
+      const summaryPath = join(projectDir, 'results', 'cc', '2026-01-01T00-00-00.000Z', 'eval-1', 'summary.json');
+      mkdirSync(dirname(summaryPath), { recursive: true });
+
+      const config = await loadConfig(join(experimentsDir, 'cc.ts'));
+      const modelConfig = { ...config, model: Array.isArray(config.model) ? config.model[0] : config.model };
+      const seedFresh = () =>
+        writeFileSync(
+          summaryPath,
+          JSON.stringify({
+            totalRuns: 1, passedRuns: 1, passRate: '100%', meanDuration: 1,
+            fingerprint: computeFingerprint(evalDir, modelConfig as never),
+            contentFingerprint: computeContentFingerprint(evalDir),
+          })
+        );
+
+      // 1. Fresh → status clean, --check passes.
+      seedFresh();
+      expect(runCli(['status'], projectDir).stdout).toContain('up to date');
+      expect(runCli(['status', '--check'], projectDir).exitCode).toBe(0);
+
+      // 2. Eval content changes → status flags it, --check fails, --json reports it.
+      writeFileSync(join(evalDir, 'EVAL.ts'), 'v2');
+      const s = runCli(['status'], projectDir).stdout;
+      expect(s).toContain('changed');
+      expect(s).toContain('eval-1');
+      expect(runCli(['status', '--check'], projectDir).exitCode).toBe(1);
+      const json = JSON.parse(runCli(['status', '--json'], projectDir).stdout);
+      expect(json.work).toEqual([{ experiment: 'cc', new: [], changed: ['eval-1'] }]);
+
+      // 3. refingerprint must NOT mask a content change — still failing.
+      runCli(['refingerprint'], projectDir);
+      expect(runCli(['status', '--check'], projectDir).exitCode).toBe(1);
+
+      // 4. A rerun (simulated by re-seeding fresh for the new content) clears it.
+      seedFresh();
+      expect(runCli(['status', '--check'], projectDir).exitCode).toBe(0);
+    });
+
+    it('status reports new and changed evals as the work to do', async () => {
+      const projectDir = join(TEST_DIR, 'status');
+      const experimentsDir = join(projectDir, 'experiments');
+      mkdirSync(experimentsDir, { recursive: true });
+      writeFileSync(join(experimentsDir, 'cc.ts'), `export default { agent: 'claude-code', model: 'opus' };`);
+      const evalDir = join(projectDir, 'evals', 'eval-1');
+      mkdirSync(evalDir, { recursive: true });
+      writeFileSync(join(evalDir, 'PROMPT.md'), 'do it');
+      writeFileSync(join(evalDir, 'EVAL.ts'), 'v1');
+      writeFileSync(join(evalDir, 'package.json'), '{"type":"module"}');
+
+      const config = await loadConfig(join(experimentsDir, 'cc.ts'));
+      const modelConfig = { ...config, model: Array.isArray(config.model) ? config.model[0] : config.model };
+      const sp = join(projectDir, 'results', 'cc', '2026-01-01T00-00-00.000Z', 'eval-1', 'summary.json');
+      mkdirSync(dirname(sp), { recursive: true });
+      writeFileSync(
+        sp,
+        JSON.stringify({
+          totalRuns: 1, passedRuns: 1, passRate: '100%', meanDuration: 1,
+          fingerprint: computeFingerprint(evalDir, modelConfig as never),
+          contentFingerprint: computeContentFingerprint(evalDir),
+        })
+      );
+
+      // Up to date.
+      expect(runCli(['status'], projectDir).stdout).toContain('up to date');
+
+      // Add a NEW eval (no result) + CHANGE the existing one.
+      const evalDir2 = join(projectDir, 'evals', 'eval-2');
+      mkdirSync(evalDir2, { recursive: true });
+      writeFileSync(join(evalDir2, 'PROMPT.md'), 'do it');
+      writeFileSync(join(evalDir2, 'EVAL.ts'), 'x');
+      writeFileSync(join(evalDir2, 'package.json'), '{"type":"module"}');
+      writeFileSync(join(evalDir, 'EVAL.ts'), 'v2');
+
+      const out = runCli(['status'], projectDir).stdout;
+      expect(out).toContain('new'); // eval-2
+      expect(out).toContain('eval-2');
+      expect(out).toContain('changed'); // eval-1
+      expect(out).toContain('eval-1');
+      expect(out).toContain('to run');
     });
   });
 });

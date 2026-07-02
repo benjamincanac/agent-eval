@@ -70,6 +70,32 @@ describe('validateConfig', () => {
     const config = { agent: 'claude-code', webResearch: 'yes' };
     expect(() => validateConfig(config)).toThrow('Invalid experiment configuration');
   });
+
+  it('accepts a pinned judge (model only, agent defaults to codegen)', () => {
+    const config = { agent: 'claude-code', judge: { model: 'claude-opus-4-8' } };
+    expect(validateConfig(config).judge).toEqual({ model: 'claude-opus-4-8' });
+  });
+
+  it('accepts a pinned judge with an explicit agent', () => {
+    const config = {
+      agent: 'codex',
+      judge: { agent: 'vercel-ai-gateway/claude-code', model: 'claude-opus-4-8' },
+    };
+    expect(validateConfig(config).judge).toEqual({
+      agent: 'vercel-ai-gateway/claude-code',
+      model: 'claude-opus-4-8',
+    });
+  });
+
+  it('rejects a judge without a model (pinning the model is required)', () => {
+    const config = { agent: 'claude-code', judge: { agent: 'claude-code' } };
+    expect(() => validateConfig(config)).toThrow('Invalid experiment configuration');
+  });
+
+  it('rejects a judge with an invalid agent', () => {
+    const config = { agent: 'claude-code', judge: { agent: 'nope', model: 'x' } };
+    expect(() => validateConfig(config)).toThrow('Invalid experiment configuration');
+  });
 });
 
 describe('resolveConfig', () => {
@@ -104,6 +130,13 @@ describe('resolveConfig', () => {
   it('passes webResearch through and leaves it undefined by default', () => {
     expect(resolveConfig({ agent: 'claude-code' as const }).webResearch).toBeUndefined();
     expect(resolveConfig({ agent: 'claude-code' as const, webResearch: true }).webResearch).toBe(true);
+  });
+
+  it('passes judge through and leaves it undefined by default', () => {
+    expect(resolveConfig({ agent: 'claude-code' as const }).judge).toBeUndefined();
+    expect(
+      resolveConfig({ agent: 'claude-code' as const, judge: { model: 'claude-opus-4-8' } }).judge
+    ).toEqual({ model: 'claude-opus-4-8' });
   });
 
 });

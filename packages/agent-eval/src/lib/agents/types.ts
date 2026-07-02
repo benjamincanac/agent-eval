@@ -2,7 +2,8 @@
  * Agent interface and common types for all agents.
  */
 
-import type { ModelPolicy, ModelTier, SetupFunction, SandboxBackend, ValidationMode } from '../types.js';
+import type { JudgeConfig, ModelPolicy, ModelTier, SetupFunction, SandboxBackend, ValidationMode } from '../types.js';
+import type { AgentDefinition } from './plugin/contract.js';
 
 /**
  * Common options for all agents.
@@ -46,6 +47,9 @@ export interface AgentRunOptions {
   webResearch?: boolean;
   /** Agent-specific options (e.g., binaryUrl, extraProviders for opencode) */
   agentOptions?: Record<string, unknown>;
+  /** Pin the agentic LLM judge to a fixed agent+model. Undefined → the judge
+   * self-grades with this run's agent+model. */
+  judge?: JudgeConfig;
 }
 
 /**
@@ -102,4 +106,8 @@ export interface Agent {
 
   /** Get the default model for this agent */
   getDefaultModel(): ModelTier;
+
+  /** The host-side definition (auth, runner path, install). Exposed so the
+   * orchestrator can resolve a DIFFERENT agent as the judge via the registry. */
+  definition: AgentDefinition;
 }

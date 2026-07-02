@@ -21,6 +21,33 @@ export const TRANSCRIPT_CONTEXT_DIR = '__agent_eval__';
 /** Path to the results file inside the sandbox. */
 export const TRANSCRIPT_CONTEXT_PATH = `${TRANSCRIPT_CONTEXT_DIR}/results.json`;
 
+// ── Agentic-judge runtime, shipped into the sandbox before validation ──────────
+// These paths are mirrored as literals in eval-helper.mjs (a zero-dep file that
+// cannot import this module). Keep the two in sync.
+
+/** The in-sandbox eval helper, aliased to `@vercel/agent-eval/eval` for EVAL.ts. */
+export const EVAL_HELPER_PATH = `${TRANSCRIPT_CONTEXT_DIR}/eval-helper.mjs`;
+
+/** Raw transcript materialized as a file so the judge agent can read it by path. */
+export const JUDGE_TRANSCRIPT_FILE = `${TRANSCRIPT_CONTEXT_DIR}/transcript.txt`;
+
+/** Judge config (`{ runnerPath, model, extra }`) read by eval-helper.mjs. */
+export const JUDGE_CONFIG_PATH = `${TRANSCRIPT_CONTEXT_DIR}/judge-config.json`;
+
+/** The judge agent's runner, shipped separately ONLY when the judge agent differs
+ * from the codegen agent. When they match, the judge reuses the codegen run.mjs. */
+export const JUDGE_RUNNER_PATH = `${TRANSCRIPT_CONTEXT_DIR}/judge-run.mjs`;
+
+/**
+ * Resolve an agent's API key from the host env. Single source of truth shared by
+ * the CLI (codegen agent) and the orchestrator (a pinned judge agent): the agent's
+ * own key env var, falling back to VERCEL_OIDC_TOKEN — which authenticates both the
+ * Vercel Sandbox and the AI Gateway. Returns undefined when neither is set.
+ */
+export function resolveAgentApiKey(getApiKeyEnvVar: () => string): string | undefined {
+  return process.env[getApiKeyEnvVar()] ?? process.env.VERCEL_OIDC_TOKEN;
+}
+
 /**
  * Combined validation results.
  */
@@ -71,7 +98,11 @@ async function detectEvalFile(sandbox: AnySandbox): Promise<string> {
 export async function runValidation(
   sandbox: AnySandbox,
   scripts: string[],
-  validation: ValidationMode = 'vitest'
+  validation: ValidationMode = 'vitest',
+  // Auth/neutral env for the eval process. EVAL.ts judge matchers re-invoke the
+  // agent CLI in-sandbox, which needs the same credentials the codegen run used —
+  // so the vitest process must carry them (it inherits them to its child spawns).
+  env?: Record<string, string>
 ): Promise<ValidationResults> {
   const results: ValidationResults = {
     allPassed: true,
@@ -83,7 +114,7 @@ export async function runValidation(
     const evalFile = await detectEvalFile(sandbox);
 
     // Always run vitest for the eval file (explicitly specify the file)
-    const testResult = await sandbox.runCommand('npx', ['vitest', 'run', evalFile]);
+    const testResult = await sandbox.runCommand('npx', ['vitest', 'run', evalFile], env ? { env } : undefined);
     results.test = {
       success: testResult.exitCode === 0,
       output: testResult.stdout + testResult.stderr,
@@ -141,7 +172,9 @@ export async function prepareNeutralWorkspace(sandbox: AnySandbox): Promise<Neut
 
 export async function initGitAndCommit(sandbox: AnySandbox): Promise<void> {
   await sandbox.writeFiles({
-    ".gitignore": "node_modules/\n",
+    // `__agent_eval__/` holds framework scaffolding only (the runner, transcript,
+    // judge I/O) — never agent output — so keep it out of the captured git diff.
+    ".gitignore": "node_modules/\n__agent_eval__/\n",
   });
 
   // init a git repo and set user and name since those are needed. Commit everything to have a clean diff with HEAD to capture
@@ -201,6 +234,11 @@ export async function createVitestConfig(sandbox: AnySandbox): Promise<void> {
   // Detect which eval file exists
   const evalFile = await detectEvalFile(sandbox);
 
+  // Absolute path to the shipped eval helper. It is BOTH the source of the
+  // `environment`/`transcript` exports (aliased to `@vercel/agent-eval/eval`) and
+  // the setup file that registers the judge matchers via expect.extend.
+  const helperPath = `${sandbox.getWorkingDirectory()}/${EVAL_HELPER_PATH}`;
+
   await sandbox.writeFiles({
     'vitest.config.ts': `
 import { defineConfig } from 'vitest/config';
@@ -208,6 +246,14 @@ export default defineConfig({
   test: {
     include: ['${evalFile}'],
     globals: false,
+    // Agentic judge matchers spawn a full agent run in-sandbox; give them room.
+    // The sandbox-level timeout is the real bound.
+    testTimeout: 900000,
+    hookTimeout: 900000,
+    setupFiles: ['${helperPath}'],
+  },
+  resolve: {
+    alias: { '@vercel/agent-eval/eval': '${helperPath}' },
   },
 });
 `,

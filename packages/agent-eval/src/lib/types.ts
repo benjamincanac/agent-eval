@@ -90,6 +90,22 @@ export type RunCompleteHook = (
 export type SandboxBackend = 'vercel' | 'docker';
 
 /**
+ * Configures the agentic LLM judge used by `expect(environment|transcript)`
+ * matchers in EVAL.ts. By default the judge runs as the SAME agent+model that
+ * generated the code (self-grading). Pin it here to grade every model with one
+ * fixed judge — the apples-to-apples choice for cross-model dashboards.
+ */
+export interface JudgeConfig {
+  /** Judge harness. Defaults to the codegen agent (same harness, model pinned).
+   * Set a Claude variant (e.g. 'vercel-ai-gateway/claude-code') to judge codex,
+   * gemini, etc. runs with Claude. */
+  agent?: AgentType;
+  /** Model the judge grades with (e.g. 'claude-opus-4-8'). Required — pinning the
+   * judge model is the whole point. */
+  model: ModelTier;
+}
+
+/**
  * Experiment configuration.
  * Defines what to test and how.
  */
@@ -149,6 +165,10 @@ export interface ExperimentConfig {
 
   /** Optional hook for custom post-run analysis before results are saved. */
   onRunComplete?: RunCompleteHook;
+
+  /** Pin the agentic LLM judge to a fixed agent+model. @default undefined
+   * (judge self-grades with the codegen agent+model). */
+  judge?: JudgeConfig;
 }
 
 /**
@@ -172,6 +192,7 @@ export interface ResolvedExperimentConfig {
   webResearch?: boolean;
   brands?: BrandConfig[];
   onRunComplete?: RunCompleteHook;
+  judge?: JudgeConfig;
 }
 
 /**
@@ -195,6 +216,7 @@ export interface RunnableExperimentConfig {
   webResearch?: boolean;
   brands?: BrandConfig[];
   onRunComplete?: RunCompleteHook;
+  judge?: JudgeConfig;
 }
 
 /**

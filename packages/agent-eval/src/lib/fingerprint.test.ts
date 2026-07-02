@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { mkdirSync, writeFileSync, rmSync, existsSync } from 'fs';
 import { join } from 'path';
-import { computeFingerprint } from './fingerprint.js';
+import { computeFingerprint, computeContentFingerprint, decideRefingerprint } from './fingerprint.js';
 import type { RunnableExperimentConfig } from './types.js';
 
 const TEST_DIR = '/tmp/eval-framework-fingerprint-test';
@@ -196,5 +196,129 @@ describe('computeFingerprint', () => {
     expect(fpModelA).toBe(fpModelAAfter);
     expect(fpModelB).toBe(fpModelBAfter);
     expect(fpModelA).not.toBe(fpModelB); // different models = different fingerprints
+  });
+
+  it('keeps unpinned-judge equivalent to existing fingerprints', () => {
+    const evalDir = createEvalDir('eval-judge-default', {
+      'PROMPT.md': 'Do something',
+      'EVAL.ts': 'test code',
+      'package.json': '{"type":"module"}',
+    });
+
+    // Cached results predate the judge field; an unpinned config must hash the same.
+    const fp1 = computeFingerprint(evalDir, baseConfig);
+    const fp2 = computeFingerprint(evalDir, { ...baseConfig, judge: undefined });
+
+    expect(fp1).toBe(fp2);
+  });
+
+  it('changes when a judge is pinned (judged results must not reuse self-graded ones)', () => {
+    const evalDir = createEvalDir('eval-judge-pinned', {
+      'PROMPT.md': 'Do something',
+      'EVAL.ts': 'test code',
+      'package.json': '{"type":"module"}',
+    });
+
+    const fp1 = computeFingerprint(evalDir, baseConfig);
+    const fp2 = computeFingerprint(evalDir, { ...baseConfig, judge: { model: 'claude-opus-4-8' } });
+
+    expect(fp1).not.toBe(fp2);
+  });
+
+  it('changes when the judge model or agent changes', () => {
+    const evalDir = createEvalDir('eval-judge-vary', {
+      'PROMPT.md': 'Do something',
+      'EVAL.ts': 'test code',
+      'package.json': '{"type":"module"}',
+    });
+
+    const opus = computeFingerprint(evalDir, { ...baseConfig, judge: { model: 'claude-opus-4-8' } });
+    const sonnet = computeFingerprint(evalDir, { ...baseConfig, judge: { model: 'claude-sonnet-4-5' } });
+    const opusGateway = computeFingerprint(evalDir, {
+      ...baseConfig,
+      judge: { agent: 'vercel-ai-gateway/claude-code', model: 'claude-opus-4-8' },
+    });
+
+    expect(opus).not.toBe(sonnet); // different judge model
+    expect(opus).not.toBe(opusGateway); // different judge agent
+  });
+});
+
+describe('computeContentFingerprint', () => {
+  beforeEach(() => mkdirSync(TEST_DIR, { recursive: true }));
+  afterEach(() => {
+    if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true });
+  });
+
+  it('is stable for the same eval files and changes when a file changes', () => {
+    const evalDir = createEvalDir('content-1', {
+      'PROMPT.md': 'Do something',
+      'EVAL.ts': 'v1',
+      'package.json': '{"type":"module"}',
+    });
+
+    const a = computeContentFingerprint(evalDir);
+    expect(computeContentFingerprint(evalDir)).toBe(a);
+    expect(a).toMatch(/^[a-f0-9]{64}$/);
+
+    writeFileSync(join(evalDir, 'EVAL.ts'), 'v2');
+    expect(computeContentFingerprint(evalDir)).not.toBe(a);
+  });
+
+  it('is NOT affected by config — a timeout bump leaves the content fingerprint unchanged', () => {
+    const evalDir = createEvalDir('content-2', {
+      'PROMPT.md': 'Do something',
+      'EVAL.ts': 'v1',
+      'package.json': '{"type":"module"}',
+    });
+
+    // The combined fingerprint changes with timeout; the content one must not.
+    const contentBefore = computeContentFingerprint(evalDir);
+    const combinedA = computeFingerprint(evalDir, baseConfig);
+    const combinedB = computeFingerprint(evalDir, { ...baseConfig, timeout: 1200 });
+
+    expect(combinedA).not.toBe(combinedB); // config affects combined
+    expect(computeContentFingerprint(evalDir)).toBe(contentBefore); // ...but not content
+  });
+});
+
+describe('decideRefingerprint', () => {
+  it('carries forward a config-only change (content unchanged)', () => {
+    const d = decideRefingerprint(
+      { fingerprint: 'old-combined', contentFingerprint: 'C' },
+      { fingerprint: 'new-combined', contentFingerprint: 'C' }
+    );
+    expect(d).toEqual({ fingerprint: 'new-combined', stale: false });
+  });
+
+  it('is a no-op when nothing changed', () => {
+    const d = decideRefingerprint(
+      { fingerprint: 'same', contentFingerprint: 'C' },
+      { fingerprint: 'same', contentFingerprint: 'C' }
+    );
+    expect(d).toEqual({ stale: false });
+  });
+
+  it('leaves a changed eval STALE — never masks it', () => {
+    const d = decideRefingerprint(
+      { fingerprint: 'old-combined', contentFingerprint: 'C_old' },
+      { fingerprint: 'new-combined', contentFingerprint: 'C_new' }
+    );
+    expect(d).toEqual({ stale: true });
+    expect(d.fingerprint).toBeUndefined(); // not re-stamped
+  });
+
+  it('legacy result (no content fp): adopts content fp only when already fully current', () => {
+    const current = decideRefingerprint(
+      { fingerprint: 'X' },
+      { fingerprint: 'X', contentFingerprint: 'C' }
+    );
+    expect(current).toEqual({ contentFingerprint: 'C', stale: false });
+
+    const behind = decideRefingerprint(
+      { fingerprint: 'X_old' },
+      { fingerprint: 'X_new', contentFingerprint: 'C' }
+    );
+    expect(behind).toEqual({ stale: true });
   });
 });

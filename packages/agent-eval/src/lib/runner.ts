@@ -86,6 +86,8 @@ export interface RunExperimentOptions {
   experimentName: string;
   /** Per-eval fingerprints (eval name -> hash) for result reuse */
   fingerprints?: Record<string, string>;
+  /** Per-eval content fingerprints (eval name -> eval-files-only hash) */
+  contentFingerprints?: Record<string, string>;
   /** Callback for progress updates */
   onProgress?: (event: ProgressEvent) => void;
   /** Whether to run in verbose mode */
@@ -121,7 +123,7 @@ interface AttemptResult {
 export async function runExperiment(
   options: RunExperimentOptions
 ): Promise<ExperimentResults> {
-  const { config, fixtures, apiKey, resultsDir, experimentName, fingerprints, onProgress, smoke, rateLimiter } = options;
+  const { config, fixtures, apiKey, resultsDir, experimentName, fingerprints, contentFingerprints, onProgress, smoke, rateLimiter } = options;
   const startedAt = new Date();
 
   // Get the agent from registry
@@ -195,6 +197,7 @@ export async function runExperiment(
         sandbox: config.sandbox,
         agentOptions: config.agentOptions,
         webResearch: config.webResearch,
+        judge: config.judge,
       }),
       new Promise<never>((_, reject) => {
         timeoutId = setTimeout(() => {
@@ -360,6 +363,7 @@ export async function runExperiment(
     resultsDir,
     experimentName,
     fingerprints,
+    contentFingerprints,
     smoke,
     fixturePaths,
   });
@@ -388,6 +392,7 @@ export async function runSingleEval<T extends ResolvedExperimentConfig['model']>
     verbose?: boolean;
     agentOptions?: ResolvedExperimentConfig['agentOptions'];
     webResearch?: ResolvedExperimentConfig['webResearch'];
+    judge?: ResolvedExperimentConfig['judge'];
   }
 ): Promise<T extends Array<unknown> ? EvalRunData[] : EvalRunData> {
   const agent = getAgent(options.agent ?? 'vercel-ai-gateway/claude-code');
@@ -411,6 +416,7 @@ export async function runSingleEval<T extends ResolvedExperimentConfig['model']>
 		sandbox: options.sandbox,
 		agentOptions: options.agentOptions,
 		webResearch: options.webResearch,
+		judge: options.judge,
 	});
 
     results.push(agentResultToEvalRunData(agentResult));

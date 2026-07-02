@@ -23,6 +23,7 @@ interface FingerprintableConfig {
   earlyExit: boolean;
   runs: number;
   webResearch?: boolean;
+  judge?: { agent?: string; model: string };
 }
 
 /**
@@ -50,21 +51,48 @@ function collectFiles(dir: string, basePath: string = ''): Array<{ relativePath:
 }
 
 /**
- * Compute a fingerprint for an (eval, config) pair.
- *
- * Hashes: all eval directory files + config fields that affect results.
- * Returns a hex SHA-256 digest.
+ * Hash every eval-directory file into the given hash, in deterministic order.
+ * Shared by {@link computeContentFingerprint} and {@link computeFingerprint} so
+ * the two stay in lockstep — the combined fingerprint's file bytes are byte-for-byte
+ * what the content fingerprint hashes, just with config appended.
  */
-export function computeFingerprint(evalPath: string, config: RunnableExperimentConfig): string {
-  const hash = createHash('sha256');
-
-  // Hash all files in the eval directory (sorted for determinism)
+function hashEvalFiles(hash: ReturnType<typeof createHash>, evalPath: string): void {
   const files = collectFiles(evalPath);
   for (const file of files) {
     hash.update(`file:${file.relativePath}\n`);
     hash.update(file.content);
     hash.update('\0');
   }
+}
+
+/**
+ * Compute a fingerprint of ONLY the eval's files (no config).
+ *
+ * This is the "did the eval itself change" signal: it changes when an eval is
+ * edited or re-synced with different content, but NOT when a benign config field
+ * (e.g. timeout) is bumped. Result reuse/refingerprinting uses it to carry forward
+ * config-only changes without ever masking a real eval change. Hex SHA-256.
+ */
+export function computeContentFingerprint(evalPath: string): string {
+  const hash = createHash('sha256');
+  hashEvalFiles(hash, evalPath);
+  return hash.digest('hex');
+}
+
+/**
+ * Compute a fingerprint for an (eval, config) pair.
+ *
+ * Hashes: all eval directory files + config fields that affect results.
+ * Returns a hex SHA-256 digest. The file-hashing is identical to
+ * {@link computeContentFingerprint}; config is appended after, so this value is
+ * byte-for-byte unchanged from before the content/config split (existing cached
+ * fingerprints stay valid).
+ */
+export function computeFingerprint(evalPath: string, config: RunnableExperimentConfig): string {
+  const hash = createHash('sha256');
+
+  // Hash all files in the eval directory (sorted for determinism)
+  hashEvalFiles(hash, evalPath);
 
   // Hash config fields that affect results
   const configForHash: FingerprintableConfig = {
@@ -85,7 +113,51 @@ export function computeFingerprint(evalPath: string, config: RunnableExperimentC
   if (config.webResearch) {
     configForHash.webResearch = true;
   }
+  // Included only when the judge is pinned, so existing (unpinned) fingerprints are
+  // unchanged. Changing the judge agent/model invalidates the cache → re-runs.
+  if (config.judge) {
+    configForHash.judge = { agent: config.judge.agent, model: config.judge.model };
+  }
   hash.update(`config:${JSON.stringify(configForHash)}`);
 
   return hash.digest('hex');
+}
+
+/** What `refingerprint` should do to one cached result's summary. */
+export interface RefingerprintDecision {
+  /** New combined fingerprint to write, or undefined to leave as-is. */
+  fingerprint?: string;
+  /** New content fingerprint to write, or undefined to leave as-is. */
+  contentFingerprint?: string;
+  /** True when the eval content changed and the result was left stale (not re-stamped). */
+  stale: boolean;
+}
+
+/**
+ * Decide how to refingerprint one cached result — the content-aware replacement for
+ * the old "re-stamp everything" behavior. The whole point: carry forward benign
+ * config changes WITHOUT masking a real eval-content change.
+ *
+ *   - content unchanged → carry the new combined fingerprint (a config-only change)
+ *   - content changed    → leave it stale (don't touch); honest "this eval changed"
+ *   - legacy (no stored content fp) → adopt the current content fp only if the result
+ *     is already fully current; otherwise leave stale (we can't prove content matches)
+ */
+export function decideRefingerprint(
+  stored: { fingerprint?: string; contentFingerprint?: string },
+  current: { fingerprint: string; contentFingerprint: string }
+): RefingerprintDecision {
+  if (stored.contentFingerprint === undefined) {
+    if (stored.fingerprint === current.fingerprint) {
+      return { contentFingerprint: current.contentFingerprint, stale: false };
+    }
+    return { stale: true };
+  }
+  if (stored.contentFingerprint === current.contentFingerprint) {
+    if (stored.fingerprint !== current.fingerprint) {
+      return { fingerprint: current.fingerprint, stale: false };
+    }
+    return { stale: false };
+  }
+  return { stale: true };
 }
